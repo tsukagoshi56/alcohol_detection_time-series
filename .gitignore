@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+outputs/
+data/index.jsonl
+*.pt
+*.pth
+*.log
+.DS_Store
