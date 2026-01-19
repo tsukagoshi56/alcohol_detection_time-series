@@ -4,6 +4,7 @@ import argparse
 import csv
 import logging
 import os
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
@@ -12,7 +13,7 @@ import torch
 
 from vas.config import Config
 from vas.indexer import build_index
-from vas.dataset import load_sessions
+from vas.dataset import load_sessions, split_by_subject
 from vas.models import SiameseResNetGRU
 from vas.trainer import run_kfold
 from vas.utils import save_config, setup_logging
@@ -55,6 +56,11 @@ def parse_args() -> argparse.Namespace:
     p_train.add_argument("--gpus", default=Config().gpus)
     p_train.add_argument("--skip-visualize", action="store_true")
 
+    p_viz = sub.add_parser("visualize", help="Run visualization only")
+    p_viz.add_argument("--output-dir", required=True)
+    p_viz.add_argument("--index-path", default=None)
+    p_viz.add_argument("--fold", type=int, default=None, help="1-based fold number")
+
     return parser.parse_args()
 
 
@@ -83,11 +89,18 @@ def load_model(checkpoint_path: Path, cfg: Config, device: torch.device) -> Siam
     return model
 
 
-def run_visualizations(cfg: Config, output_dir: str, splits: List[Tuple[List[str], List[str], List[str]]]) -> None:
+def run_visualizations(
+    cfg: Config,
+    output_dir: str,
+    splits: List[Tuple[List[str], List[str], List[str]]],
+    only_fold: int | None = None,
+) -> None:
     sessions = load_sessions(cfg.index_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     for fold_idx, (_, _, test_ids) in enumerate(splits):
+        if only_fold is not None and (fold_idx + 1) != only_fold:
+            continue
         fold_dir = Path(output_dir) / f"fold_{fold_idx}"
         model_path = fold_dir / "model_best.pt"
         if not model_path.exists():
@@ -176,6 +189,22 @@ def main() -> None:
 
         if not args.skip_visualize:
             run_visualizations(cfg, output_dir, splits)
+        return
+
+    if args.command == "visualize":
+        output_dir = args.output_dir
+        cfg_path = Path(output_dir) / "config.json"
+        if not cfg_path.exists():
+            raise FileNotFoundError(f"config.json not found in {output_dir}")
+        cfg_data = json.loads(cfg_path.read_text(encoding="utf-8"))
+        if args.index_path:
+            cfg_data["index_path"] = args.index_path
+        cfg = Config(**cfg_data)
+
+        splits = split_by_subject(load_sessions(cfg.index_path), cfg.n_folds, cfg.seed, cfg.val_ratio)
+        setup_logging(os.path.join(output_dir, "visualize.log"))
+        run_visualizations(cfg, output_dir, splits, only_fold=args.fold)
+        return
 
 
 if __name__ == "__main__":
