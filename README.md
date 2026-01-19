@@ -70,6 +70,11 @@ Run visualization only:
 python main.py visualize --output-dir outputs/run_YYYYmmdd_HHMMSS
 ```
 
+Coarse inference every 10 seconds:
+```bash
+python main.py visualize --output-dir outputs/run_YYYYmmdd_HHMMSS --infer-stride-sec 10
+```
+
 ## Notes
 - Time-series visualization uses **sliding 5s windows** with configurable stride.
 - Moving average is applied to probabilities for smoother plots.

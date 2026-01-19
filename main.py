@@ -60,6 +60,8 @@ def parse_args() -> argparse.Namespace:
     p_viz.add_argument("--output-dir", required=True)
     p_viz.add_argument("--index-path", default=None)
     p_viz.add_argument("--fold", type=int, default=None, help="1-based fold number")
+    p_viz.add_argument("--infer-stride-sec", type=int, default=None)
+    p_viz.add_argument("--smooth-window-sec", type=int, default=None)
 
     return parser.parse_args()
 
@@ -199,6 +201,10 @@ def main() -> None:
         cfg_data = json.loads(cfg_path.read_text(encoding="utf-8"))
         if args.index_path:
             cfg_data["index_path"] = args.index_path
+        if args.infer_stride_sec is not None:
+            cfg_data["infer_stride_sec"] = args.infer_stride_sec
+        if args.smooth_window_sec is not None:
+            cfg_data["smooth_window_sec"] = args.smooth_window_sec
         cfg = Config(**cfg_data)
 
         splits = split_by_subject(load_sessions(cfg.index_path), cfg.n_folds, cfg.seed, cfg.val_ratio)

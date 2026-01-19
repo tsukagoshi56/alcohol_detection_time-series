@@ -92,6 +92,18 @@ def predict_timeseries(
     return {"times": times, "probs": probs}
 
 
+def _collect_vas_points(session: SessionData) -> List[tuple[float, int]]:
+    points = []
+    for group_id, group in session.vas_groups.items():
+        if group_id == "vas0":
+            continue
+        if group.vas_time_min is None:
+            continue
+        points.append((group.vas_time_min * 60.0, group.vas_value))
+    points.sort(key=lambda x: x[0])
+    return points
+
+
 def save_timeseries_plot(output_dir: Path, session: SessionData, data: Dict[str, np.ndarray], cfg: Config) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     times = data["times"]
@@ -106,11 +118,18 @@ def save_timeseries_plot(output_dir: Path, session: SessionData, data: Dict[str,
     for i in range(probs.shape[1]):
         ax.plot(times, smoothed[:, i], label=f"class{i}")
 
-    ax.set_title(f"Session {session.session_id} - Smoothed probabilities")
+    # Avoid non-ASCII glyph issues in titles by keeping it simple.
+    ax.set_title("Smoothed probabilities")
     ax.set_xlabel("Time (sec)")
     ax.set_ylabel("Probability")
     ax.set_ylim(0.0, 1.0)
     ax.legend(loc="upper right", ncol=2)
+
+    vas_points = _collect_vas_points(session)
+    for t_sec, v in vas_points:
+        ax.axvline(t_sec, color="gray", alpha=0.35, linewidth=1)
+        ax.text(t_sec, 0.98, f"VAS={v}", rotation=90, va="top", ha="right", fontsize=8, color="gray")
+
     fig.tight_layout()
 
     fig_path = output_dir / f"{session.session_id}_timeseries.png"
@@ -124,6 +143,14 @@ def save_timeseries_plot(output_dir: Path, session: SessionData, data: Dict[str,
         writer.writerow(header)
         for t, row in zip(times, probs):
             writer.writerow([f"{t:.2f}", *[f"{v:.6f}" for v in row]])
+
+    if vas_points:
+        vas_path = output_dir / f"{session.session_id}_vas_points.csv"
+        with vas_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["time_sec", "vas_value"])
+            for t_sec, v in vas_points:
+                writer.writerow([f"{t_sec:.2f}", int(v)])
 
 
 def torchvision_read(path: str) -> torch.Tensor:
