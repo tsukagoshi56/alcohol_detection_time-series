@@ -113,13 +113,15 @@ def run_visualizations(
         out_dir = fold_dir / "timeseries"
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        for session_id in test_ids:
+        total = len(test_ids)
+        for idx, session_id in enumerate(test_ids, 1):
             session = sessions.get(session_id)
             if session is None:
                 continue
             try:
                 data = predict_timeseries(model, session, cfg, device)
                 save_timeseries_plot(out_dir, session, data, cfg)
+                logger.info("Fold %s: %s/%s %s done", fold_idx + 1, idx, total, session_id)
             except Exception as exc:
                 logger.warning("Timeseries failed for %s: %s", session_id, exc)
 
