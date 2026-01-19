@@ -55,13 +55,13 @@ def predict_timeseries(
 ) -> Dict[str, np.ndarray]:
     transform = SequenceTransform(cfg, train=False)
 
-    if not session.normal_frames:
-        raise ValueError(f"No normal frames for session {session.session_id}")
+    if not session.anchor_frames:
+        raise ValueError(f"No anchor frames for session {session.session_id}")
 
-    anchor_start = _pick_start(session.normal_frames, cfg.clip_sec)
-    anchor_frames = [f for f in session.normal_frames if anchor_start <= f.time_sec < anchor_start + cfg.clip_sec]
+    anchor_start = _pick_start(session.anchor_frames, cfg.clip_sec)
+    anchor_frames = [f for f in session.anchor_frames if anchor_start <= f.time_sec < anchor_start + cfg.clip_sec]
     if not anchor_frames:
-        anchor_frames = session.normal_frames[:]
+        anchor_frames = session.anchor_frames[:]
     anchor_frames = _sample_sequence(anchor_frames, cfg.seq_len)
     anchor_seq = torch.stack([torchvision_read(f.path) for f in anchor_frames], dim=0)
     anchor_seq = transform(anchor_seq).unsqueeze(0).to(device)

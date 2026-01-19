@@ -18,6 +18,9 @@ class Config:
     clip_sec: int = 5
     seq_len: int = 15  # 3 fps * 5 sec
     min_frames_per_window: int = 3
+    anchor_end_sec: int = 300  # 0-5 min for Siamese anchor
+    normal_target_start_sec: int = 300  # 5-10 min used as VAS=0 targets
+    normal_target_end_sec: int = 600
 
     # Training samples per VAS window
     train_samples_per_group: int = 6
@@ -31,7 +34,7 @@ class Config:
 
     # Model
     backbone: str = "resnet18"
-    pretrained: bool = False
+    pretrained: bool = True
     rnn_hidden: int = 256
     rnn_layers: int = 2
     bidirectional: bool = True
@@ -43,6 +46,10 @@ class Config:
     lr: float = 1e-4
     weight_decay: float = 1e-4
     early_stop_patience: int = 10
+    use_class_weights: bool = True
+    use_focal_loss: bool = True
+    focal_gamma: float = 2.0
+    use_weighted_sampler: bool = True
 
     # Runtime
     use_amp: bool = True

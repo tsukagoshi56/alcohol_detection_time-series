@@ -69,3 +69,4 @@ outputs/run_YYYYmmdd_HHMMSS/
 - Time-series visualization uses **sliding 5s windows** with configurable stride.
 - Moving average is applied to probabilities for smoother plots.
 - VAS=0 precision/recall/F1 are included in `cv_results.csv`.
+- Siamese anchor uses **0-5 min**; VAS=0 targets use **5-10 min** normal window.

@@ -42,12 +42,16 @@ def parse_args() -> argparse.Namespace:
     p_train.add_argument("--lr", type=float, default=Config().lr)
     p_train.add_argument("--backbone", default=Config().backbone)
     p_train.add_argument("--pretrained", action="store_true")
+    p_train.add_argument("--no-pretrained", action="store_true")
     p_train.add_argument("--no-amp", action="store_true")
     p_train.add_argument("--num-workers", type=int, default=Config().num_workers)
     p_train.add_argument("--train-samples-per-group", type=int, default=Config().train_samples_per_group)
     p_train.add_argument("--val-ratio", type=float, default=Config().val_ratio)
     p_train.add_argument("--infer-stride-sec", type=int, default=Config().infer_stride_sec)
     p_train.add_argument("--smooth-window-sec", type=int, default=Config().smooth_window_sec)
+    p_train.add_argument("--no-class-weights", action="store_true")
+    p_train.add_argument("--no-focal", action="store_true")
+    p_train.add_argument("--no-weighted-sampler", action="store_true")
     p_train.add_argument("--gpus", default=Config().gpus)
     p_train.add_argument("--skip-visualize", action="store_true")
 
@@ -133,6 +137,12 @@ def main() -> None:
 
         setup_logging(os.path.join(output_dir, "train.log"))
 
+        pretrained = Config().pretrained
+        if args.pretrained:
+            pretrained = True
+        if args.no_pretrained:
+            pretrained = False
+
         cfg = Config(
             data_root=args.data_root,
             index_path=args.index_path,
@@ -145,13 +155,16 @@ def main() -> None:
             epochs=args.epochs,
             lr=args.lr,
             backbone=args.backbone,
-            pretrained=args.pretrained,
+            pretrained=pretrained,
             use_amp=not args.no_amp,
             num_workers=args.num_workers,
             train_samples_per_group=args.train_samples_per_group,
             val_ratio=args.val_ratio,
             infer_stride_sec=args.infer_stride_sec,
             smooth_window_sec=args.smooth_window_sec,
+            use_class_weights=not args.no_class_weights,
+            use_focal_loss=not args.no_focal,
+            use_weighted_sampler=not args.no_weighted_sampler,
             gpus=args.gpus,
         )
 

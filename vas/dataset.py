@@ -34,7 +34,8 @@ class VasGroup:
 class SessionData:
     session_id: str
     subject_id: int
-    normal_frames: List[Frame]
+    anchor_frames: List[Frame]
+    normal_target_frames: List[Frame]
     vas_groups: Dict[str, VasGroup]
     all_frames: List[Frame]
 
@@ -112,7 +113,8 @@ def load_sessions(index_path: str) -> Dict[str, SessionData]:
             session = SessionData(
                 session_id=record.session_id,
                 subject_id=record.subject_id,
-                normal_frames=[],
+                anchor_frames=[],
+                normal_target_frames=[],
                 vas_groups={},
                 all_frames=[],
             )
@@ -122,7 +124,12 @@ def load_sessions(index_path: str) -> Dict[str, SessionData]:
         session.all_frames.append(frame)
 
         if record.label_type == "normal":
-            session.normal_frames.append(frame)
+            if record.time_sec < 0:
+                continue
+            if record.time_sec < 300:
+                session.anchor_frames.append(frame)
+            elif 300 <= record.time_sec < 600:
+                session.normal_target_frames.append(frame)
         elif record.label_type == "vas":
             group_id = record.label
             group = session.vas_groups.get(group_id)
@@ -140,7 +147,8 @@ def load_sessions(index_path: str) -> Dict[str, SessionData]:
 
     # Sort frames by time for deterministic sampling
     for session in sessions.values():
-        session.normal_frames.sort(key=lambda f: f.time_sec)
+        session.anchor_frames.sort(key=lambda f: f.time_sec)
+        session.normal_target_frames.sort(key=lambda f: f.time_sec)
         session.all_frames.sort(key=lambda f: f.time_sec)
         for group in session.vas_groups.values():
             group.frames.sort(key=lambda f: f.time_sec)
@@ -208,12 +216,27 @@ class SiameseVasDataset(Dataset):
         self.samples: List[Sample] = []
         for session_id in session_ids:
             session = sessions[session_id]
-            if not session.normal_frames or not session.vas_groups:
+            if not session.anchor_frames:
+                continue
+            if not session.vas_groups and not session.normal_target_frames:
                 continue
             for group_id, group in session.vas_groups.items():
                 label = quantize_vas(group.vas_value, cfg.num_classes)
                 for _ in range(samples_per_group):
                     self.samples.append(Sample(session_id=session_id, group_id=group_id, label=label))
+
+            # Add VAS=0 group from 5-10 min normal window
+            if len(session.normal_target_frames) >= cfg.min_frames_per_window:
+                group_id = "vas0"
+                group = VasGroup(
+                    group_id=group_id,
+                    vas_value=0,
+                    vas_time_min=10,
+                    frames=session.normal_target_frames,
+                )
+                session.vas_groups[group_id] = group
+                for _ in range(samples_per_group):
+                    self.samples.append(Sample(session_id=session_id, group_id=group_id, label=0))
 
         if not self.samples:
             raise ValueError(f"No samples for split={split}. Check data/index and filters.")
@@ -239,8 +262,8 @@ class SiameseVasDataset(Dataset):
         anchor_mode = "random" if self.split == "train" else "center"
         target_mode = "random" if self.split == "train" else "center"
 
-        anchor_start = _pick_start(session.normal_frames, self.cfg.clip_sec, anchor_mode)
-        anchor_frames = _select_frames(session.normal_frames, anchor_start, self.cfg.clip_sec)
+        anchor_start = _pick_start(session.anchor_frames, self.cfg.clip_sec, anchor_mode)
+        anchor_frames = _select_frames(session.anchor_frames, anchor_start, self.cfg.clip_sec)
         anchor_frames = _sample_sequence(anchor_frames, self.cfg.seq_len)
 
         target_start = _pick_start(group.frames, self.cfg.clip_sec, target_mode)

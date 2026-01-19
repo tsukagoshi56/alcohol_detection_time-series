@@ -49,8 +49,27 @@ def compute_class_weights(labels: List[int], num_classes: int) -> torch.Tensor:
     return torch.tensor(weights, dtype=torch.float32)
 
 
+class FocalLoss(nn.Module):
+    def __init__(self, gamma: float = 2.0, weight: torch.Tensor | None = None) -> None:
+        super().__init__()
+        self.gamma = gamma
+        self.weight = weight
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        logp = torch.log_softmax(logits, dim=1)
+        p = torch.exp(logp)
+        targets = targets.view(-1, 1)
+        logp_t = logp.gather(1, targets).squeeze(1)
+        p_t = p.gather(1, targets).squeeze(1)
+        loss = -(1 - p_t) ** self.gamma * logp_t
+        if self.weight is not None:
+            w = self.weight.to(logits.device)
+            loss = loss * w[targets.squeeze(1)]
+        return loss.mean()
+
+
 def build_dataloader(dataset: SiameseVasDataset, cfg: Config, shuffle: bool) -> DataLoader:
-    if shuffle:
+    if shuffle and cfg.use_weighted_sampler:
         labels = [s.label for s in dataset.samples]
         weights = compute_class_weights(labels, cfg.num_classes)
         sample_weights = [weights[l].item() for l in labels]
@@ -186,7 +205,15 @@ def run_kfold(cfg: Config, output_dir: str) -> Tuple[List[Dict[str, float]], Lis
         if device.type == "cuda" and len(device_ids) > 1:
             model = nn.DataParallel(model, device_ids=device_ids)
 
-        criterion = nn.CrossEntropyLoss()
+        class_weights = None
+        if cfg.use_class_weights:
+            labels = [s.label for s in train_ds.samples]
+            class_weights = compute_class_weights(labels, cfg.num_classes).to(device)
+
+        if cfg.use_focal_loss:
+            criterion = FocalLoss(gamma=cfg.focal_gamma, weight=class_weights)
+        else:
+            criterion = nn.CrossEntropyLoss(weight=class_weights)
         optimizer = AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
         scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
