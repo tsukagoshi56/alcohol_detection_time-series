@@ -5,6 +5,8 @@ import csv
 import logging
 import os
 import json
+import itertools
+import statistics
 from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
@@ -18,7 +20,6 @@ from vas.models import SiameseResNetGRU
 from vas.trainer import run_kfold
 from vas.utils import save_config, setup_logging
 from vas.visualize import predict_timeseries, save_timeseries_plot
-from vas.video_infer import run_video_visualization
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,35 @@ def parse_args() -> argparse.Namespace:
     p_viz_video.add_argument("--fold", type=int, default=None, help="1-based fold number")
     p_viz_video.add_argument("--infer-stride-sec", type=int, default=None)
     p_viz_video.add_argument("--smooth-window-sec", type=int, default=None)
+
+    p_f1 = sub.add_parser("summarize-f1", help="Summarize CV metrics from cv_results.csv")
+    p_f1.add_argument("--output-dir", action="append", default=[], help="Run directory (repeatable)")
+    p_f1.add_argument("--outputs-root", default=None, help="Scan outputs root for run_* directories")
+    p_f1.add_argument("--csv-out", default=None, help="Write summary CSV to this path")
+
+    p_sweep = sub.add_parser("sweep", help="Run a small hyperparameter sweep")
+    p_sweep.add_argument("--data-root", default=Config().data_root)
+    p_sweep.add_argument("--index-path", default=Config().index_path)
+    p_sweep.add_argument("--output-root", default=Config().output_dir)
+    p_sweep.add_argument("--num-classes", type=int, default=Config().num_classes)
+    p_sweep.add_argument("--clip-sec", type=int, default=Config().clip_sec)
+    p_sweep.add_argument("--seq-len", type=int, default=Config().seq_len)
+    p_sweep.add_argument("--n-folds", type=int, default=3)
+    p_sweep.add_argument("--epochs", type=int, default=10)
+    p_sweep.add_argument("--early-stop-patience", type=int, default=5)
+    p_sweep.add_argument("--num-workers", type=int, default=Config().num_workers)
+    p_sweep.add_argument("--train-samples-per-group", type=int, default=Config().train_samples_per_group)
+    p_sweep.add_argument("--val-ratio", type=float, default=Config().val_ratio)
+    p_sweep.add_argument("--lrs", default=str(Config().lr))
+    p_sweep.add_argument("--batch-sizes", default=str(Config().batch_size))
+    p_sweep.add_argument("--focal-gammas", default=str(Config().focal_gamma))
+    p_sweep.add_argument("--no-amp", action="store_true")
+    p_sweep.add_argument("--no-class-weights", action="store_true")
+    p_sweep.add_argument("--no-focal", action="store_true")
+    p_sweep.add_argument("--no-weighted-sampler", action="store_true")
+    p_sweep.add_argument("--gpus", default=Config().gpus)
+    p_sweep.add_argument("--with-visualize", action="store_true")
+    p_sweep.add_argument("--tag", default=None)
 
     return parser.parse_args()
 
@@ -143,6 +173,178 @@ def write_cv_results(results: List[dict], output_dir: str) -> None:
         writer.writeheader()
         for row in results:
             writer.writerow({k: row.get(k) for k in fields})
+
+
+def _mean_std(values: List[float]) -> tuple[float, float]:
+    mean = statistics.mean(values)
+    std = statistics.stdev(values) if len(values) > 1 else 0.0
+    return mean, std
+
+
+def _summarize_dir(output_dir: Path) -> dict | None:
+    input_path = output_dir / "cv_results.csv"
+    if not input_path.exists():
+        print(f"{output_dir.name}: cv_results.csv not found")
+        return None
+
+    metrics = {
+        "accuracy": [],
+        "macro_f1": [],
+        "class0_precision": [],
+        "class0_recall": [],
+        "class0_f1": [],
+    }
+
+    with input_path.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if not row:
+                continue
+            for key in metrics:
+                try:
+                    metrics[key].append(float(row.get(key, "")))
+                except (TypeError, ValueError):
+                    pass
+
+    if not metrics["macro_f1"]:
+        print(f"{output_dir.name}: no metric values found")
+        return None
+
+    summary = {"run": output_dir.name, "folds": len(metrics["macro_f1"])}
+    print(f"run: {output_dir.name}")
+    print(f"folds: {len(metrics['macro_f1'])}")
+    for key, values in metrics.items():
+        if not values:
+            continue
+        mean, std = _mean_std(values)
+        summary[f"{key}_mean"] = mean
+        summary[f"{key}_std"] = std
+        print(f"{key}: mean={mean:.4f} std={std:.4f}")
+    return summary
+
+
+def summarize_f1(output_dirs: List[str], outputs_root: str | None, csv_out: str | None) -> None:
+    dirs: List[Path] = []
+    for output_dir in output_dirs:
+        dirs.append(Path(output_dir))
+
+    if outputs_root:
+        root = Path(outputs_root)
+        if root.exists():
+            if (root / "cv_results.csv").exists():
+                dirs.append(root)
+            for cand in sorted(root.glob("run_*")):
+                if (cand / "cv_results.csv").exists():
+                    dirs.append(cand)
+
+    if not dirs:
+        default_root = Path(Config().output_dir)
+        if default_root.exists():
+            for cand in sorted(default_root.glob("run_*")):
+                if (cand / "cv_results.csv").exists():
+                    dirs.append(cand)
+
+    if not dirs:
+        raise ValueError("No output directories found. Provide --output-dir or --outputs-root.")
+
+    summaries: List[dict] = []
+    for i, output_dir in enumerate(dirs):
+        if i > 0:
+            print()
+        summary = _summarize_dir(output_dir)
+        if summary:
+            summaries.append(summary)
+
+    if csv_out and summaries:
+        output_path = Path(csv_out)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        metric_keys = ["accuracy", "macro_f1", "class0_precision", "class0_recall", "class0_f1"]
+        fieldnames = ["run", "folds"]
+        for key in metric_keys:
+            fieldnames.append(f"{key}_mean")
+            fieldnames.append(f"{key}_std")
+
+        with output_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for summary in summaries:
+                writer.writerow({k: summary.get(k, "") for k in fieldnames})
+
+
+def _parse_list(value: str, cast) -> List:
+    items = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        items.append(cast(part))
+    return items
+
+
+def run_sweep(args: argparse.Namespace) -> None:
+    lrs = _parse_list(args.lrs, float)
+    batch_sizes = _parse_list(args.batch_sizes, int)
+    gammas = _parse_list(args.focal_gammas, float)
+    if args.no_focal:
+        gammas = [Config().focal_gamma]
+
+    if not lrs or not batch_sizes or not gammas:
+        raise ValueError("Sweep lists cannot be empty. Check --lrs/--batch-sizes/--focal-gammas.")
+
+    ensure_index(args.data_root, args.index_path)
+
+    base_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tag = ""
+    if args.tag:
+        safe_tag = args.tag.strip().replace(" ", "_")
+        tag = f"_{safe_tag}"
+
+    for idx, (lr, batch_size, gamma) in enumerate(itertools.product(lrs, batch_sizes, gammas), 1):
+        lr_str = str(lr).replace(".", "p")
+        gamma_str = "nofocal" if args.no_focal else str(gamma).replace(".", "p")
+        run_name = f"run_{base_stamp}{tag}_sweep{idx:02d}_lr{lr_str}_bs{batch_size}_g{gamma_str}"
+        output_dir = Path(args.output_root) / run_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        setup_logging(str(output_dir / "train.log"), force=True)
+
+        cfg = Config(
+            data_root=args.data_root,
+            index_path=args.index_path,
+            output_dir=str(output_dir),
+            num_classes=args.num_classes,
+            clip_sec=args.clip_sec,
+            seq_len=args.seq_len,
+            n_folds=args.n_folds,
+            batch_size=batch_size,
+            epochs=args.epochs,
+            lr=lr,
+            train_samples_per_group=args.train_samples_per_group,
+            val_ratio=args.val_ratio,
+            use_amp=not args.no_amp,
+            early_stop_patience=args.early_stop_patience,
+            use_class_weights=not args.no_class_weights,
+            use_focal_loss=not args.no_focal,
+            focal_gamma=gamma,
+            use_weighted_sampler=not args.no_weighted_sampler,
+            num_workers=args.num_workers,
+            gpus=args.gpus,
+        )
+
+        save_config(cfg, str(output_dir))
+        logger.info(
+            "Sweep %s: lr=%s batch=%s gamma=%s",
+            idx,
+            lr,
+            batch_size,
+            "disabled" if args.no_focal else gamma,
+        )
+
+        results, splits = run_kfold(cfg, str(output_dir))
+        write_cv_results(results, str(output_dir))
+
+        if args.with_visualize:
+            run_visualizations(cfg, str(output_dir), splits)
 
 
 def main() -> None:
@@ -224,6 +426,8 @@ def main() -> None:
         return
 
     if args.command == "visualize-video":
+        from vas.video_infer import run_video_visualization
+
         output_dir = args.output_dir
         cfg_path = Path(output_dir) / "config.json"
         if not cfg_path.exists():
@@ -253,6 +457,14 @@ def main() -> None:
             model = load_model(model_path, cfg, device)
             out_dir = fold_dir / "video_timeseries"
             run_video_visualization(cfg, str(out_dir), sessions, test_ids, args.video_root, model, device)
+        return
+
+    if args.command == "summarize-f1":
+        summarize_f1(args.output_dir, args.outputs_root, args.csv_out)
+        return
+
+    if args.command == "sweep":
+        run_sweep(args)
         return
 
 

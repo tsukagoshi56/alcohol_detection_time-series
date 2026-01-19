@@ -83,6 +83,45 @@ python main.py visualize-video \
   --infer-stride-sec 10
 ```
 
+Summarize CV metrics (accuracy, macro F1, class0 precision/recall/F1):
+```bash
+python main.py summarize-f1 --output-dir outputs/run_YYYYmmdd_HHMMSS
+```
+
+Summarize all runs under the outputs root:
+```bash
+python main.py summarize-f1 --outputs-root outputs
+```
+
+Write a summary CSV:
+```bash
+python main.py summarize-f1 --outputs-root outputs --csv-out outputs/summary.csv
+```
+
+Small hyperparameter sweep (quick validation):
+```bash
+python main.py sweep \
+  --output-root outputs \
+  --n-folds 3 \
+  --epochs 10 \
+  --lrs 1e-4,3e-4 \
+  --batch-sizes 32,64 \
+  --focal-gammas 2.0
+```
+
+Optuna tuning (small validation):
+```bash
+/home/user/alcohol_exp/workspace/vas_detection/.venv/bin/python scripts/optuna_tune.py \
+  --output-root outputs \
+  --n-folds 3 \
+  --epochs 10 \
+  --n-trials 8 \
+  --lr-min 1e-4 \
+  --lr-max 3e-3 \
+  --batch-sizes 32,64 \
+  --focal-gammas 1.0,2.0
+```
+
 ## Notes
 - Time-series visualization uses **sliding 5s windows** with configurable stride.
 - Moving average is applied to probabilities for smoother plots.
