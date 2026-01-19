@@ -18,6 +18,7 @@ from vas.models import SiameseResNetGRU
 from vas.trainer import run_kfold
 from vas.utils import save_config, setup_logging
 from vas.visualize import predict_timeseries, save_timeseries_plot
+from vas.video_infer import run_video_visualization
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,14 @@ def parse_args() -> argparse.Namespace:
     p_viz.add_argument("--fold", type=int, default=None, help="1-based fold number")
     p_viz.add_argument("--infer-stride-sec", type=int, default=None)
     p_viz.add_argument("--smooth-window-sec", type=int, default=None)
+
+    p_viz_video = sub.add_parser("visualize-video", help="Run visualization directly from videos")
+    p_viz_video.add_argument("--output-dir", required=True)
+    p_viz_video.add_argument("--video-root", default="/home/user/alcohol_exp/database")
+    p_viz_video.add_argument("--index-path", default=None)
+    p_viz_video.add_argument("--fold", type=int, default=None, help="1-based fold number")
+    p_viz_video.add_argument("--infer-stride-sec", type=int, default=None)
+    p_viz_video.add_argument("--smooth-window-sec", type=int, default=None)
 
     return parser.parse_args()
 
@@ -212,6 +221,38 @@ def main() -> None:
         splits = split_by_subject(load_sessions(cfg.index_path), cfg.n_folds, cfg.seed, cfg.val_ratio)
         setup_logging(os.path.join(output_dir, "visualize.log"))
         run_visualizations(cfg, output_dir, splits, only_fold=args.fold)
+        return
+
+    if args.command == "visualize-video":
+        output_dir = args.output_dir
+        cfg_path = Path(output_dir) / "config.json"
+        if not cfg_path.exists():
+            raise FileNotFoundError(f"config.json not found in {output_dir}")
+        cfg_data = json.loads(cfg_path.read_text(encoding="utf-8"))
+        if args.index_path:
+            cfg_data["index_path"] = args.index_path
+        if args.infer_stride_sec is not None:
+            cfg_data["infer_stride_sec"] = args.infer_stride_sec
+        if args.smooth_window_sec is not None:
+            cfg_data["smooth_window_sec"] = args.smooth_window_sec
+        cfg = Config(**cfg_data)
+
+        sessions = load_sessions(cfg.index_path)
+        splits = split_by_subject(sessions, cfg.n_folds, cfg.seed, cfg.val_ratio)
+        setup_logging(os.path.join(output_dir, "visualize_video.log"))
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        for fold_idx, (_, _, test_ids) in enumerate(splits):
+            if args.fold is not None and (fold_idx + 1) != args.fold:
+                continue
+            fold_dir = Path(output_dir) / f"fold_{fold_idx}"
+            model_path = fold_dir / "model_best.pt"
+            if not model_path.exists():
+                logger.warning("Missing model for fold %s: %s", fold_idx + 1, model_path)
+                continue
+            model = load_model(model_path, cfg, device)
+            out_dir = fold_dir / "video_timeseries"
+            run_video_visualization(cfg, str(out_dir), sessions, test_ids, args.video_root, model, device)
         return
 
 
