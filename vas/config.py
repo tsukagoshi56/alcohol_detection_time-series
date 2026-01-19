@@ -60,6 +60,10 @@ class Config:
     img_size: Tuple[int, int] = (224, 224)
     mean: Tuple[float, float, float] = (0.485, 0.456, 0.406)
     std: Tuple[float, float, float] = (0.229, 0.224, 0.225)
+    flip_prob: float = 0.5
+    brightness_jitter: float = 0.0
+    contrast_jitter: float = 0.0
+    noise_std: float = 0.0
 
     # Time-series visualization
     infer_stride_sec: int = 1

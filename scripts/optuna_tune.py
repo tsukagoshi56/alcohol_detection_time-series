@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import statistics
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +37,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr-min", type=float, default=1e-4)
     parser.add_argument("--lr-max", type=float, default=3e-3)
     parser.add_argument("--focal-gammas", default="1.0,2.0")
+    parser.add_argument("--flip-probs", default=str(Config().flip_prob))
+    parser.add_argument("--brightness-jitters", default=str(Config().brightness_jitter))
+    parser.add_argument("--contrast-jitters", default=str(Config().contrast_jitter))
+    parser.add_argument("--noise-stds", default=str(Config().noise_std))
     parser.add_argument("--no-amp", action="store_true")
     parser.add_argument("--no-class-weights", action="store_true")
     parser.add_argument("--no-focal", action="store_true")
@@ -43,6 +48,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gpus", default=Config().gpus)
     parser.add_argument("--study-name", default="vas_optuna")
     parser.add_argument("--storage", default=None, help="Optuna storage (e.g. sqlite:///study.db)")
+    parser.add_argument("--trial-csv", default=None, help="Write trial summary CSV")
+    parser.add_argument("--note", default=None, help="Short note stored with each trial")
     parser.add_argument("--tag", default=None)
     return parser.parse_args()
 
@@ -62,6 +69,31 @@ def ensure_index(data_root: str, index_path: str) -> None:
         build_index(data_root, index_path)
 
 
+def _append_trial_csv(path: Path, row: dict) -> None:
+    fieldnames = [
+        "trial",
+        "macro_f1_mean",
+        "class0_f1_mean",
+        "accuracy_mean",
+        "lr",
+        "batch_size",
+        "focal_gamma",
+        "flip_prob",
+        "brightness_jitter",
+        "contrast_jitter",
+        "noise_std",
+        "note",
+        "output_dir",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not path.exists()
+    with path.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        writer.writerow({k: row.get(k, "") for k in fieldnames})
+
+
 def main() -> None:
     args = parse_args()
     ensure_index(args.data_root, args.index_path)
@@ -74,10 +106,27 @@ def main() -> None:
     if args.no_focal:
         focal_gammas = [Config().focal_gamma]
 
+    flip_probs = parse_list(args.flip_probs, float)
+    brightness_jitters = parse_list(args.brightness_jitters, float)
+    contrast_jitters = parse_list(args.contrast_jitters, float)
+    noise_stds = parse_list(args.noise_stds, float)
+    if not flip_probs:
+        flip_probs = [Config().flip_prob]
+    if not brightness_jitters:
+        brightness_jitters = [Config().brightness_jitter]
+    if not contrast_jitters:
+        contrast_jitters = [Config().contrast_jitter]
+    if not noise_stds:
+        noise_stds = [Config().noise_std]
+
     base_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     tag = ""
     if args.tag:
         tag = f"_{args.tag.strip().replace(' ', '_')}"
+
+    trial_csv = Path(args.trial_csv) if args.trial_csv else None
+    if trial_csv is None:
+        trial_csv = Path(args.output_root) / f"optuna_trials_{base_stamp}{tag}.csv"
 
     sampler = optuna.samplers.TPESampler(seed=args.seed)
     study = optuna.create_study(
@@ -92,6 +141,10 @@ def main() -> None:
         lr = trial.suggest_float("lr", args.lr_min, args.lr_max, log=True)
         batch_size = trial.suggest_categorical("batch_size", batch_sizes)
         gamma = trial.suggest_categorical("focal_gamma", focal_gammas)
+        flip_prob = trial.suggest_categorical("flip_prob", flip_probs)
+        brightness_jitter = trial.suggest_categorical("brightness_jitter", brightness_jitters)
+        contrast_jitter = trial.suggest_categorical("contrast_jitter", contrast_jitters)
+        noise_std = trial.suggest_categorical("noise_std", noise_stds)
 
         run_name = f"run_{base_stamp}{tag}_optuna_t{trial.number:03d}"
         output_dir = Path(args.output_root) / run_name
@@ -121,14 +174,38 @@ def main() -> None:
             num_workers=args.num_workers,
             gpus=args.gpus,
             seed=args.seed,
+            flip_prob=flip_prob,
+            brightness_jitter=brightness_jitter,
+            contrast_jitter=contrast_jitter,
+            noise_std=noise_std,
         )
 
         save_config(cfg, str(output_dir))
 
         results, _ = run_kfold(cfg, str(output_dir))
         macro_f1 = [r.get("macro_f1", 0.0) for r in results]
+        class0_f1 = [r.get("class0_f1", 0.0) for r in results]
+        accuracy = [r.get("accuracy", 0.0) for r in results]
         score = statistics.mean(macro_f1) if macro_f1 else 0.0
         trial.set_user_attr("output_dir", str(output_dir))
+        _append_trial_csv(
+            trial_csv,
+            {
+                "trial": trial.number,
+                "macro_f1_mean": score,
+                "class0_f1_mean": statistics.mean(class0_f1) if class0_f1 else 0.0,
+                "accuracy_mean": statistics.mean(accuracy) if accuracy else 0.0,
+                "lr": lr,
+                "batch_size": batch_size,
+                "focal_gamma": gamma,
+                "flip_prob": flip_prob,
+                "brightness_jitter": brightness_jitter,
+                "contrast_jitter": contrast_jitter,
+                "noise_std": noise_std,
+                "note": args.note,
+                "output_dir": str(output_dir),
+            },
+        )
         return score
 
     study.optimize(objective, n_trials=args.n_trials)

@@ -119,8 +119,13 @@ Optuna tuning (small validation):
   --lr-min 1e-4 \
   --lr-max 3e-3 \
   --batch-sizes 32,64 \
-  --focal-gammas 1.0,2.0
+  --focal-gammas 1.0,2.0 \
+  --flip-probs 0.0,0.5 \
+  --brightness-jitters 0.0,0.1 \
+  --contrast-jitters 0.0,0.1 \
+  --noise-stds 0.0,0.02
 ```
+Trial summaries are written to `outputs/optuna_trials_*.csv` by default (override with `--trial-csv`).
 
 ## Notes
 - Time-series visualization uses **sliding 5s windows** with configurable stride.

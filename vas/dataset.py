@@ -53,12 +53,27 @@ class SequenceTransform:
         self.size = cfg.img_size
         self.mean = torch.tensor(cfg.mean).view(1, 3, 1, 1)
         self.std = torch.tensor(cfg.std).view(1, 3, 1, 1)
+        self.flip_prob = cfg.flip_prob
+        self.brightness_jitter = cfg.brightness_jitter
+        self.contrast_jitter = cfg.contrast_jitter
+        self.noise_std = cfg.noise_std
 
     def __call__(self, seq: torch.Tensor) -> torch.Tensor:
         # seq: (T, C, H, W), uint8
         seq = seq.float() / 255.0
-        if self.train and random.random() < 0.5:
+        if self.train and self.flip_prob > 0 and random.random() < self.flip_prob:
             seq = torch.flip(seq, dims=[3])
+        if self.train and self.brightness_jitter > 0:
+            factor = 1.0 + random.uniform(-self.brightness_jitter, self.brightness_jitter)
+            seq = seq * factor
+        if self.train and self.contrast_jitter > 0:
+            factor = 1.0 + random.uniform(-self.contrast_jitter, self.contrast_jitter)
+            mean = seq.mean(dim=(0, 2, 3), keepdim=True)
+            seq = (seq - mean) * factor + mean
+        if self.train and self.noise_std > 0:
+            seq = seq + torch.randn_like(seq) * self.noise_std
+        if self.train:
+            seq = torch.clamp(seq, 0.0, 1.0)
         seq = F.interpolate(seq, size=self.size, mode="bilinear", align_corners=False)
         seq = (seq - self.mean) / self.std
         return seq
