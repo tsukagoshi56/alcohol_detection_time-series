@@ -91,9 +91,9 @@ def _load_face_detector():
     return mp.solutions.face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
 
 
-def _detect_face(frame: np.ndarray, detector) -> np.ndarray:
+def _detect_face(frame: np.ndarray, detector) -> Optional[np.ndarray]:
     if detector is None:
-        return _center_crop(frame)
+        return None
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     res = detector.process(rgb)
     if res.detections:
@@ -106,7 +106,7 @@ def _detect_face(frame: np.ndarray, detector) -> np.ndarray:
         y2 = min(h, int((bbox.ymin + bbox.height) * h))
         if x2 > x1 and y2 > y1:
             return frame[y1:y2, x1:x2]
-    return _center_crop(frame)
+    return None
 
 
 def _read_frame_at(cap: cv2.VideoCapture, t_sec: float) -> Optional[np.ndarray]:
@@ -133,6 +133,8 @@ def _build_sequence(
         if frame is None:
             continue
         face = _detect_face(frame, detector)
+        if face is None:
+            continue
         face = cv2.resize(face, transform.size)
         face = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
         frames.append(torch.from_numpy(face).permute(2, 0, 1))
@@ -164,7 +166,8 @@ def run_video_visualization(
 ) -> None:
     detector = _load_face_detector()
     if detector is None:
-        logger.warning("MediaPipe not available; using center crop for faces")
+        logger.warning("MediaPipe not available; skipping video inference")
+        return
 
     transform = SequenceTransform(cfg, train=False)
     out_dir = Path(output_dir)
