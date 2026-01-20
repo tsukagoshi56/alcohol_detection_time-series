@@ -1,39 +1,39 @@
-# VAS Time-Series (Rebuilt)
+# VAS 時系列（再構築版）
 
-This project rebuilds the VAS time-series pipeline from scratch with a focus on speed and clean data flow.
+本プロジェクトは VAS 時系列パイプラインを、速度とデータフローの明確さを重視して再構築したものです。
 
-## Core idea
-- **Siamese model**: anchor = Normal window, target = VAS window.
-- **VAS=0 is a special class**.
-- **Other VAS values are split into uniform bins** over `(0, 100]`.
+## 基本方針
+- **Siamese モデル**: anchor = Normal 窓、target = VAS 窓。
+- **VAS=0 を特別クラス**として扱う。
+- **その他の VAS 値は (0, 100] を等間隔 bin に分割**。
 
-Example with `--num-classes 3`:
+`--num-classes 3` の例:
 - class0: VAS = 0
 - class1: VAS = 1..50
 - class2: VAS = 51..100
 
-## Data
-This code reads already-extracted images at **3 fps** from:
+## データ
+本コードは、事前抽出済みの顔画像（**3 fps**）を読み込みます:
 
 ```
 /home/user/alcohol_exp/workspace/vas_detection/face_data_vas
 ```
 
-Filename format (from extraction):
+ファイル名フォーマット（抽出時）:
 ```
 subj102_normal_t73s_f1100.png
 subj102_vas20min_t919s_f13793_vas2_class0.png
 ```
 
-The indexer parses:
-- subject id
-- session id (folder name)
-- time (sec)
-- VAS value (if present)
+インデクサが解析する情報:
+- 被験者ID
+- セッションID（フォルダ名）
+- 時刻（秒）
+- VAS 値（存在する場合）
 
-## Quickstart
+## クイックスタート
 
-Build index:
+インデックス作成:
 
 ```bash
 python main.py index \
@@ -41,7 +41,7 @@ python main.py index \
   --index-path data/index.jsonl
 ```
 
-Train (K-fold, default 9):
+学習（K-fold、デフォルト 9）:
 
 ```bash
 python main.py train \
@@ -51,7 +51,7 @@ python main.py train \
   --epochs 50
 ```
 
-Outputs:
+出力:
 ```
 outputs/run_YYYYmmdd_HHMMSS/
   config.json
@@ -65,17 +65,17 @@ outputs/run_YYYYmmdd_HHMMSS/
       <session>_timeseries.png
 ```
 
-Run visualization only:
+可視化のみ実行:
 ```bash
 python main.py visualize --output-dir outputs/run_YYYYmmdd_HHMMSS
 ```
 
-Coarse inference every 10 seconds:
+10秒間隔の粗い推論:
 ```bash
 python main.py visualize --output-dir outputs/run_YYYYmmdd_HHMMSS --infer-stride-sec 10
 ```
 
-Run visualization directly from videos (covers non-extracted ranges):
+動画から直接可視化（未抽出区間もカバー）:
 ```bash
 python main.py visualize-video \
   --output-dir outputs/run_YYYYmmdd_HHMMSS \
@@ -83,22 +83,22 @@ python main.py visualize-video \
   --infer-stride-sec 10
 ```
 
-Summarize CV metrics (accuracy, macro F1, class0 precision/recall/F1):
+CV 指標の要約（accuracy / macro F1 / class0 precision/recall/F1）:
 ```bash
 python main.py summarize-f1 --output-dir outputs/run_YYYYmmdd_HHMMSS
 ```
 
-Summarize all runs under the outputs root:
+outputs 直下の全 run を要約:
 ```bash
 python main.py summarize-f1 --outputs-root outputs
 ```
 
-Write a summary CSV:
+要約 CSV を出力:
 ```bash
 python main.py summarize-f1 --outputs-root outputs --csv-out outputs/summary.csv
 ```
 
-Small hyperparameter sweep (quick validation):
+小規模ハイパラスイープ（簡易検証）:
 ```bash
 python main.py sweep \
   --output-root outputs \
@@ -109,7 +109,7 @@ python main.py sweep \
   --focal-gammas 2.0
 ```
 
-Optuna tuning (small validation):
+Optuna チューニング（小規模検証）:
 ```bash
 /home/user/alcohol_exp/workspace/vas_detection/.venv/bin/python scripts/optuna_tune.py \
   --output-root outputs \
@@ -125,12 +125,12 @@ Optuna tuning (small validation):
   --contrast-jitters 0.0,0.1 \
   --noise-stds 0.0,0.02
 ```
-Trial summaries are written to `outputs/optuna_trials_*.csv` by default (override with `--trial-csv`).
-If you hit CUDA pin-memory errors, add `--no-pin-memory` (and/or `--num-workers 0`).
+試行サマリは既定で `outputs/optuna_trials_*.csv` に出力されます（`--trial-csv` で変更可）。
+CUDA の pin-memory エラーが出る場合は `--no-pin-memory`（必要なら `--num-workers 0`）を追加してください。
 
-## Notes
-- Time-series visualization uses **sliding 5s windows** with configurable stride.
-- Moving average is applied to probabilities for smoother plots.
-- VAS=0 precision/recall/F1 are included in `cv_results.csv`.
-- Siamese anchor uses **0-5 min**; VAS=0 targets use **5-10 min** normal window.
-- Visualization uses all available frames in the extracted dataset. Full-time coverage depends on what was extracted.
+## 注意点
+- 時系列可視化は **5秒窓スライド**で、stride は調整可能です。
+- スムージング（移動平均）で確率曲線を平滑化します。
+- VAS=0 の precision/recall/F1 は `cv_results.csv` に含まれます。
+- Siamese の anchor は **0-5分**、VAS=0 の target は **5-10分**の normal 窓を使用します。
+- 可視化は抽出済みフレームに依存するため、全時間を必ずしもカバーしません。
