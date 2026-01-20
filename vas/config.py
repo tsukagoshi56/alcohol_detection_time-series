@@ -55,6 +55,8 @@ class Config:
     use_amp: bool = True
     num_workers: int = 8
     gpus: Optional[str] = None  # e.g. "0,1,2,3"
+    pin_memory: bool = True
+    persistent_workers: bool = True
 
     # Image
     img_size: Tuple[int, int] = (224, 224)

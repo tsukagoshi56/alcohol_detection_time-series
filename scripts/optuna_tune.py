@@ -49,6 +49,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-class-weights", action="store_true")
     parser.add_argument("--no-focal", action="store_true")
     parser.add_argument("--no-weighted-sampler", action="store_true")
+    parser.add_argument("--pin-memory", action="store_true")
+    parser.add_argument("--no-pin-memory", action="store_true")
+    parser.add_argument("--persistent-workers", action="store_true")
+    parser.add_argument("--no-persistent-workers", action="store_true")
     parser.add_argument("--gpus", default=Config().gpus)
     parser.add_argument("--study-name", default="vas_optuna")
     parser.add_argument("--storage", default=None, help="Optuna storage (e.g. sqlite:///study.db)")
@@ -123,6 +127,18 @@ def main() -> None:
     if not noise_stds:
         noise_stds = [Config().noise_std]
 
+    pin_memory = Config().pin_memory
+    if args.pin_memory:
+        pin_memory = True
+    if args.no_pin_memory:
+        pin_memory = False
+
+    persistent_workers = Config().persistent_workers
+    if args.persistent_workers:
+        persistent_workers = True
+    if args.no_persistent_workers:
+        persistent_workers = False
+
     base_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     tag = ""
     if args.tag:
@@ -182,35 +198,60 @@ def main() -> None:
             brightness_jitter=brightness_jitter,
             contrast_jitter=contrast_jitter,
             noise_std=noise_std,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers,
         )
 
         save_config(cfg, str(output_dir))
 
-        results, _ = run_kfold(cfg, str(output_dir))
-        macro_f1 = [r.get("macro_f1", 0.0) for r in results]
-        class0_f1 = [r.get("class0_f1", 0.0) for r in results]
-        accuracy = [r.get("accuracy", 0.0) for r in results]
-        score = statistics.mean(macro_f1) if macro_f1 else 0.0
-        trial.set_user_attr("output_dir", str(output_dir))
-        _append_trial_csv(
-            trial_csv,
-            {
-                "trial": trial.number,
-                "macro_f1_mean": score,
-                "class0_f1_mean": statistics.mean(class0_f1) if class0_f1 else 0.0,
-                "accuracy_mean": statistics.mean(accuracy) if accuracy else 0.0,
-                "lr": lr,
-                "batch_size": batch_size,
-                "focal_gamma": gamma,
-                "flip_prob": flip_prob,
-                "brightness_jitter": brightness_jitter,
-                "contrast_jitter": contrast_jitter,
-                "noise_std": noise_std,
-                "note": args.note,
-                "output_dir": str(output_dir),
-            },
-        )
-        return score
+        try:
+            results, _ = run_kfold(cfg, str(output_dir))
+            macro_f1 = [r.get("macro_f1", 0.0) for r in results]
+            class0_f1 = [r.get("class0_f1", 0.0) for r in results]
+            accuracy = [r.get("accuracy", 0.0) for r in results]
+            score = statistics.mean(macro_f1) if macro_f1 else 0.0
+            trial.set_user_attr("output_dir", str(output_dir))
+            _append_trial_csv(
+                trial_csv,
+                {
+                    "trial": trial.number,
+                    "macro_f1_mean": score,
+                    "class0_f1_mean": statistics.mean(class0_f1) if class0_f1 else 0.0,
+                    "accuracy_mean": statistics.mean(accuracy) if accuracy else 0.0,
+                    "lr": lr,
+                    "batch_size": batch_size,
+                    "focal_gamma": gamma,
+                    "flip_prob": flip_prob,
+                    "brightness_jitter": brightness_jitter,
+                    "contrast_jitter": contrast_jitter,
+                    "noise_std": noise_std,
+                    "note": args.note,
+                    "output_dir": str(output_dir),
+                },
+            )
+            return score
+        except Exception as exc:
+            trial.set_user_attr("error", str(exc))
+            _append_trial_csv(
+                trial_csv,
+                {
+                    "trial": trial.number,
+                    "macro_f1_mean": 0.0,
+                    "class0_f1_mean": 0.0,
+                    "accuracy_mean": 0.0,
+                    "lr": lr,
+                    "batch_size": batch_size,
+                    "focal_gamma": gamma,
+                    "flip_prob": flip_prob,
+                    "brightness_jitter": brightness_jitter,
+                    "contrast_jitter": contrast_jitter,
+                    "noise_std": noise_std,
+                    "note": f"{args.note or ''} error: {exc}".strip(),
+                    "output_dir": str(output_dir),
+                },
+            )
+            print(f"[WARN] Trial {trial.number} failed: {exc}")
+            return 0.0
 
     study.optimize(objective, n_trials=args.n_trials)
 

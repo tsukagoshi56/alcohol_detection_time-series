@@ -84,8 +84,8 @@ def build_dataloader(dataset: SiameseVasDataset, cfg: Config, shuffle: bool) -> 
         shuffle=shuffle,
         sampler=sampler,
         num_workers=cfg.num_workers,
-        pin_memory=True,
-        persistent_workers=cfg.num_workers > 0,
+        pin_memory=cfg.pin_memory,
+        persistent_workers=cfg.persistent_workers and cfg.num_workers > 0,
         worker_init_fn=_worker_init,
     )
 

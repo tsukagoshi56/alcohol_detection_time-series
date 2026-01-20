@@ -56,6 +56,10 @@ def parse_args() -> argparse.Namespace:
     p_train.add_argument("--brightness-jitter", type=float, default=Config().brightness_jitter)
     p_train.add_argument("--contrast-jitter", type=float, default=Config().contrast_jitter)
     p_train.add_argument("--noise-std", type=float, default=Config().noise_std)
+    p_train.add_argument("--pin-memory", action="store_true")
+    p_train.add_argument("--no-pin-memory", action="store_true")
+    p_train.add_argument("--persistent-workers", action="store_true")
+    p_train.add_argument("--no-persistent-workers", action="store_true")
     p_train.add_argument("--no-class-weights", action="store_true")
     p_train.add_argument("--no-focal", action="store_true")
     p_train.add_argument("--no-weighted-sampler", action="store_true")
@@ -102,6 +106,10 @@ def parse_args() -> argparse.Namespace:
     p_sweep.add_argument("--brightness-jitter", type=float, default=Config().brightness_jitter)
     p_sweep.add_argument("--contrast-jitter", type=float, default=Config().contrast_jitter)
     p_sweep.add_argument("--noise-std", type=float, default=Config().noise_std)
+    p_sweep.add_argument("--pin-memory", action="store_true")
+    p_sweep.add_argument("--no-pin-memory", action="store_true")
+    p_sweep.add_argument("--persistent-workers", action="store_true")
+    p_sweep.add_argument("--no-persistent-workers", action="store_true")
     p_sweep.add_argument("--no-amp", action="store_true")
     p_sweep.add_argument("--no-class-weights", action="store_true")
     p_sweep.add_argument("--no-focal", action="store_true")
@@ -296,6 +304,18 @@ def run_sweep(args: argparse.Namespace) -> None:
     if args.no_focal:
         gammas = [Config().focal_gamma]
 
+    pin_memory = Config().pin_memory
+    if args.pin_memory:
+        pin_memory = True
+    if args.no_pin_memory:
+        pin_memory = False
+
+    persistent_workers = Config().persistent_workers
+    if args.persistent_workers:
+        persistent_workers = True
+    if args.no_persistent_workers:
+        persistent_workers = False
+
     if not lrs or not batch_sizes or not gammas:
         raise ValueError("Sweep lists cannot be empty. Check --lrs/--batch-sizes/--focal-gammas.")
 
@@ -341,6 +361,8 @@ def run_sweep(args: argparse.Namespace) -> None:
             brightness_jitter=args.brightness_jitter,
             contrast_jitter=args.contrast_jitter,
             noise_std=args.noise_std,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers,
         )
 
         save_config(cfg, str(output_dir))
@@ -383,6 +405,18 @@ def main() -> None:
         if args.no_pretrained:
             pretrained = False
 
+        pin_memory = Config().pin_memory
+        if args.pin_memory:
+            pin_memory = True
+        if args.no_pin_memory:
+            pin_memory = False
+
+        persistent_workers = Config().persistent_workers
+        if args.persistent_workers:
+            persistent_workers = True
+        if args.no_persistent_workers:
+            persistent_workers = False
+
         cfg = Config(
             data_root=args.data_root,
             index_path=args.index_path,
@@ -406,6 +440,8 @@ def main() -> None:
             brightness_jitter=args.brightness_jitter,
             contrast_jitter=args.contrast_jitter,
             noise_std=args.noise_std,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers,
             use_class_weights=not args.no_class_weights,
             use_focal_loss=not args.no_focal,
             use_weighted_sampler=not args.no_weighted_sampler,

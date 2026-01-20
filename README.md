@@ -126,6 +126,7 @@ Optuna tuning (small validation):
   --noise-stds 0.0,0.02
 ```
 Trial summaries are written to `outputs/optuna_trials_*.csv` by default (override with `--trial-csv`).
+If you hit CUDA pin-memory errors, add `--no-pin-memory` (and/or `--num-workers 0`).
 
 ## Notes
 - Time-series visualization uses **sliding 5s windows** with configurable stride.
