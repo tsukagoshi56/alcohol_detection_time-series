@@ -41,11 +41,13 @@ def accuracy(cm: np.ndarray) -> float:
 def classification_report(cm: np.ndarray) -> Dict[str, float]:
     acc = accuracy(cm)
     macro = macro_f1(cm)
-    p0, r0, f10 = precision_recall_f1(cm, 0)
-    return {
+    report = {
         "accuracy": acc,
         "macro_f1": macro,
-        "class0_precision": p0,
-        "class0_recall": r0,
-        "class0_f1": f10,
     }
+    for i in range(cm.shape[0]):
+        p, r, f1 = precision_recall_f1(cm, i)
+        report[f"class{i}_precision"] = p
+        report[f"class{i}_recall"] = r
+        report[f"class{i}_f1"] = f1
+    return report

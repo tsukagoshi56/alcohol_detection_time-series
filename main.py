@@ -5,6 +5,7 @@ import csv
 import logging
 import os
 import json
+import re
 import itertools
 import statistics
 from datetime import datetime
@@ -183,7 +184,23 @@ def run_visualizations(
 
 def write_cv_results(results: List[dict], output_dir: str) -> None:
     output_path = Path(output_dir) / "cv_results.csv"
-    fields = ["fold", "accuracy", "macro_f1", "class0_precision", "class0_recall", "class0_f1"]
+    max_classes = 0
+    for row in results:
+        cm = row.get("cm")
+        if cm:
+            max_classes = max(max_classes, len(cm))
+    if max_classes == 0:
+        for row in results:
+            for key in row.keys():
+                match = re.match(r"class(\d+)_precision", key)
+                if match:
+                    max_classes = max(max_classes, int(match.group(1)) + 1)
+
+    fields = ["fold", "accuracy", "macro_f1"]
+    for i in range(max_classes):
+        fields.append(f"class{i}_precision")
+        fields.append(f"class{i}_recall")
+        fields.append(f"class{i}_f1")
     with output_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
