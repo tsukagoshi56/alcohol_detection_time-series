@@ -63,6 +63,146 @@ def load_experiment_csv(csv_path: str) -> Dict[str, str]:
     return mapping
 
 
+def _load_face_detector():
+    """Load MediaPipe face detection model."""
+    try:
+        import mediapipe as mp
+        mp_face_detection = mp.solutions.face_detection
+        detector = mp_face_detection.FaceDetection(
+            model_selection=1,  # Full-range model
+            min_detection_confidence=0.5,
+        )
+        return detector
+    except ImportError:
+        logger.warning("MediaPipe not installed. Install with: pip install mediapipe")
+        return None
+    except Exception as e:
+        logger.warning("Failed to load face detector: %s", e)
+        return None
+
+
+def parse_session_id(session_id: str) -> Optional[VideoInfo]:
+    """Parse session ID to extract video information.
+    
+    Expected format: subjectID_date_condition_trial
+    Example: 1_20230101_alcohol_1
+    """
+    pattern = r"^(\d+)_(\d{8})_(\w+)_(\d+)$"
+    match = re.match(pattern, session_id)
+    if not match:
+        logger.debug("Could not parse session_id: %s", session_id)
+        return None
+    
+    subject_id = int(match.group(1))
+    date = match.group(2)
+    condition = match.group(3)
+    trial = match.group(4)
+    
+    return VideoInfo(
+        session_id=session_id,
+        subject_id=subject_id,
+        date=date,
+        condition=condition,
+        trial=trial,
+    )
+
+
+def find_video_file(video_root: str, info: VideoInfo) -> Optional[str]:
+    """Search for video file matching the session info."""
+    root = Path(video_root)
+    if not root.exists():
+        return None
+    
+    # Common video extensions
+    extensions = [".mp4", ".avi", ".mov", ".mkv"]
+    
+    # Try different naming patterns
+    patterns = [
+        f"{info.session_id}",
+        f"{info.subject_id}_{info.date}_{info.condition}_{info.trial}",
+        f"subject{info.subject_id}_{info.date}_{info.condition}",
+    ]
+    
+    for pattern in patterns:
+        for ext in extensions:
+            # Direct match
+            candidate = root / f"{pattern}{ext}"
+            if candidate.exists():
+                return str(candidate)
+            
+            # Search in subdirectories
+            for match in root.rglob(f"*{pattern}*{ext}"):
+                return str(match)
+    
+    return None
+
+
+def _video_duration(cap: cv2.VideoCapture) -> float:
+    """Get video duration in seconds."""
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    if fps > 0:
+        return frame_count / fps
+    return 0.0
+
+
+def _extract_frame(
+    cap: cv2.VideoCapture,
+    t_sec: float,
+    detector,
+    transform,
+    device: torch.device,
+) -> Optional[torch.Tensor]:
+    """Extract and preprocess a single frame from video at time t_sec."""
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps <= 0:
+        return None
+    
+    frame_idx = int(t_sec * fps)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+    ret, frame = cap.read()
+    if not ret:
+        return None
+    
+    # Convert BGR to RGB
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    
+    # Detect face and crop if detector available
+    if detector is not None:
+        try:
+            results = detector.process(frame_rgb)
+            if results.detections:
+                detection = results.detections[0]
+                bbox = detection.location_data.relative_bounding_box
+                h, w = frame_rgb.shape[:2]
+                
+                x1 = max(0, int(bbox.xmin * w))
+                y1 = max(0, int(bbox.ymin * h))
+                x2 = min(w, int((bbox.xmin + bbox.width) * w))
+                y2 = min(h, int((bbox.ymin + bbox.height) * h))
+                
+                # Add margin
+                margin = int(0.2 * max(x2 - x1, y2 - y1))
+                x1 = max(0, x1 - margin)
+                y1 = max(0, y1 - margin)
+                x2 = min(w, x2 + margin)
+                y2 = min(h, y2 + margin)
+                
+                frame_rgb = frame_rgb[y1:y2, x1:x2]
+        except Exception as e:
+            logger.debug("Face detection failed: %s", e)
+    
+    # Apply transform
+    try:
+        from PIL import Image
+        pil_img = Image.fromarray(frame_rgb)
+        tensor = transform(pil_img)
+        return tensor.unsqueeze(0).to(device)
+    except Exception as e:
+        logger.debug("Transform failed: %s", e)
+        return None
+
+
 def run_video_visualization(
     cfg: Config,
     output_dir: str,
