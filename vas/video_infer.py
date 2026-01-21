@@ -99,10 +99,22 @@ def _load_face_detector():
         
         # Hide GPU from MediaPipe to force CPU mode
         os.environ['CUDA_VISIBLE_DEVICES'] = ''
-        logger.info("Forcing MediaPipe to CPU by setting CUDA_VISIBLE_DEVICES=''")
         
         # Import MediaPipe with GPU hidden
         import mediapipe as mp
+        try:
+            logger.info("MediaPipe location: %s", mp.__file__)
+        except Exception:
+            pass
+            
+        # Explicitly try to import solutions if missing
+        if not hasattr(mp, 'solutions'):
+            logger.warning("mp.solutions not found, attempting explicit import...")
+            try:
+                import mediapipe.python.solutions as solutions
+                mp.solutions = solutions
+            except ImportError as e:
+                logger.error("Explicit import of mediapipe.python.solutions failed: %s", e)
         
         # Restore CUDA for PyTorch
         if original_cuda_devices is None:
@@ -110,11 +122,14 @@ def _load_face_detector():
                 del os.environ['CUDA_VISIBLE_DEVICES']
         else:
             os.environ['CUDA_VISIBLE_DEVICES'] = original_cuda_devices
-        logger.info("Restored CUDA_VISIBLE_DEVICES for PyTorch")
         
+        if not hasattr(mp, 'solutions'):
+            logger.error("mp.solutions is still missing after all attempts.")
+            return None
+
         # Create detector
         detector = MediaPipeFaceDetector(mp.solutions.face_detection)
-        logger.info("Loaded MediaPipe face detector (CPU mode)")
+        logger.info("Loaded MediaPipe face detector")
         return detector
         
     except ImportError as e:
