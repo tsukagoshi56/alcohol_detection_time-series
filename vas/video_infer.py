@@ -87,113 +87,168 @@ class MediaPipeFaceDetector:
         self._closed = True
 
 
-class OpenCVFaceDetector:
-    """OpenCV face detector wrapper to mimic MediaPipe interface."""
+
+import os
+import urllib.request
+
+class MediaPipeTasksFaceDetector:
+    """Wrapper for MediaPipe Tasks API (Face Detector)."""
     
-    def __init__(self):
-        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        if not Path(cascade_path).exists():
-           raise RuntimeError(f"OpenCV Haar cascade not found at {cascade_path}")
-           
-        self.cascade = cv2.CascadeClassifier(cascade_path)
+    def __init__(self, model_path: str):
+        import mediapipe as mp
+        from mediapipe.tasks import python
+        from mediapipe.tasks.python import vision
+        
+        base_options = python.BaseOptions(model_asset_path=model_path)
+        options = vision.FaceDetectorOptions(
+            base_options=base_options,
+            min_detection_confidence=0.5
+        )
+        self.detector = vision.FaceDetector.create_from_options(options)
         self._closed = False
         
     def process(self, frame_rgb):
-        """Detect faces and convert to MediaPipe-like result format."""
+        """Run face detection using Tasks API and convert to legacy format."""
         if self._closed:
             return None
             
-        gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
-        faces = self.cascade.detectMultiScale(
-            gray, 
-            scaleFactor=1.1, 
-            minNeighbors=5, 
-            minSize=(60, 60)
-        )
+        import mediapipe as mp
+        # Convert numpy array to MediaPipe Image
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
         
-        if len(faces) == 0:
-            return None
+        # Detect
+        detection_result = self.detector.detect(mp_image)
+        
+        if not detection_result.detections:
+            return type('Result', (), {'detections': []})()
             
-        # Wrap the result to look like MediaPipe output
-        # Find largest face
-        x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-        
-        # Convert to relative bounding box
+        # Convert format to match legacy Solutions API
+        # Solutions API returns normalized [0,1] coordinates
+        # Tasks API returns bounding_box in PIXELS (origin top-left)
+        # We need to normalize them to match existing logic
         H, W = frame_rgb.shape[:2]
         
-        class MockDetection:
-             def __init__(self, x, y, w, h):
-                 self.location_data = self.LocationData(x, y, w, h)
-                 
-             class LocationData:
-                 def __init__(self, x, y, w, h):
-                     self.relative_bounding_box = self.RelativeBoundingBox(x, y, w, h)
-                     
-                 class RelativeBoundingBox:
-                     def __init__(self, x, y, w, h):
-                         self.xmin = x / W
-                         self.ymin = y / H
-                         self.width = w / W
-                         self.height = h / H
+        legacy_detections = []
+        for det in detection_result.detections:
+            bbox = det.bounding_box
+            # Normalize to [0, 1] as expected by the rest of the code
+            norm_box = type('RelativeBoundingBox', (), {
+                'xmin': bbox.origin_x / W,
+                'ymin': bbox.origin_y / H,
+                'width': bbox.width / W,
+                'height': bbox.height / H,
+            })()
+            
+            loc_data = type('LocationData', (), {'relative_bounding_box': norm_box})()
+            legacy_det = type('Detection', (), {'location_data': loc_data})()
+            legacy_detections.append(legacy_det)
+            
+        return type('Result', (), {'detections': legacy_detections})()
 
-        return type('Result', (), {'detections': [MockDetection(x, y, w, h)]})()
-        
     def close(self):
+        if not self._closed:
+            self.detector.close()
         self._closed = True
 
 
-def _load_face_detector():
-    """Load face detector with fallback strategy.
+class MediaPipeSolutionsFaceDetector:
+    """Wrapper for MediaPipe Solutions API (Legacy)."""
+    def __init__(self, mp_face_detection):
+        self._detector = mp_face_detection.FaceDetection(
+            model_selection=1, min_detection_confidence=0.5
+        )
+        self._closed = False
     
-    Strategy:
-    1. MediaPipe Solutions (Standard approach) - using GPU conflict workaround
-    2. OpenCV Haar Cascade (Fallback) - widely available
-    """
-    # 1. Try MediaPipe
+    def process(self, frame_rgb):
+        if self._closed: return None
+        return self._detector.process(frame_rgb)
+    
+    def close(self):
+        if not self._closed: self._detector.close()
+        self._closed = True
+
+
+def _download_model_if_needed(model_name="blaze_face_short_range.tflite"):
+    """Download MediaPipe face detection model if not present."""
+    url = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite"
+    
+    # Save to user's cache dir or local dir
+    cache_dir = Path.home() / ".cache" / "mediapipe_models"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    model_path = cache_dir / model_name
+    
+    if not model_path.exists():
+        logger.info("Downloading MediaPipe model to %s...", model_path)
+        try:
+            urllib.request.urlretrieve(url, model_path)
+            logger.info("Download complete.")
+        except Exception as e:
+            logger.error("Failed to download model: %s", e)
+            return None
+            
+    return str(model_path)
+
+
+def _load_face_detector():
+    """Load face detector (Solutions API -> Tasks API)."""
+    
+    # 1. Try MediaPipe Solutions API (Preferred if working)
     try:
         # Save original CUDA setting
         original_cuda_devices = os.environ.get('CUDA_VISIBLE_DEVICES', None)
-        # Hide GPU from MediaPipe
-        os.environ['CUDA_VISIBLE_DEVICES'] = ''
+        os.environ['CUDA_VISIBLE_DEVICES'] = '' # Force CPU to avoid conflict
         
         import mediapipe as mp
         
-        # Check if solutions is available (it might be missing in broken installs)
         if hasattr(mp, 'solutions') and hasattr(mp.solutions, 'face_detection'):
-             detector = MediaPipeFaceDetector(mp.solutions.face_detection)
-             logger.info("Loaded MediaPipe face detector")
+             detector = MediaPipeSolutionsFaceDetector(mp.solutions.face_detection)
+             logger.info("Loaded MediaPipe face detector (Solutions API)")
+             
              # Restore CUDA
-             if original_cuda_devices is None:
-                 if 'CUDA_VISIBLE_DEVICES' in os.environ:
-                     del os.environ['CUDA_VISIBLE_DEVICES']
-             else:
+             if original_cuda_devices is None and 'CUDA_VISIBLE_DEVICES' in os.environ:
+                 del os.environ['CUDA_VISIBLE_DEVICES']
+             elif original_cuda_devices is not None:
                  os.environ['CUDA_VISIBLE_DEVICES'] = original_cuda_devices
              return detector
-             
-        # Restore CUDA if we failed early
-        if original_cuda_devices is None:
-             if 'CUDA_VISIBLE_DEVICES' in os.environ:
-                 del os.environ['CUDA_VISIBLE_DEVICES']
-        else:
-             os.environ['CUDA_VISIBLE_DEVICES'] = original_cuda_devices
-             
-    except Exception as e:
-        logger.warning(f"MediaPipe load failed ({e}), falling back to OpenCV...")
-        # Ensure CUDA env is restored even after exception
-        if original_cuda_devices is None:
-             if 'CUDA_VISIBLE_DEVICES' in os.environ:
-                 del os.environ['CUDA_VISIBLE_DEVICES']
-        else:
-             os.environ['CUDA_VISIBLE_DEVICES'] = original_cuda_devices
 
-    # 2. Try OpenCV
-    try:
-        logger.info("Attempting to load OpenCV face detector as fallback...")
-        detector = OpenCVFaceDetector()
-        logger.info("Loaded OpenCV face detector (Fallback)")
-        return detector
+        # Restore CUDA if failed
+        if original_cuda_devices is None and 'CUDA_VISIBLE_DEVICES' in os.environ:
+             del os.environ['CUDA_VISIBLE_DEVICES']
+        elif original_cuda_devices is not None:
+             os.environ['CUDA_VISIBLE_DEVICES'] = original_cuda_devices
+             
     except Exception as e:
-        logger.error("Failed to load OpenCV face detector: %s", e)
+        logger.debug("MediaPipe Solutions API load failed: %s", e)
+        # Restore CUDA
+        original_cuda_devices = os.environ.get('CUDA_VISIBLE_DEVICES', None) # Re-read just in case
+        if 'CUDA_VISIBLE_DEVICES' in os.environ: # Clean up if we set it locally
+             pass # Actually we need correct logic here, simplification:
+    
+    # Ensure env is clean
+    if 'CUDA_VISIBLE_DEVICES' in os.environ and os.environ['CUDA_VISIBLE_DEVICES'] == '':
+         del os.environ['CUDA_VISIBLE_DEVICES']
+
+
+    # 2. Try MediaPipe Tasks API (New API - for broken installs)
+    try:
+        logger.info("Solutions API missing. Attempting MediaPipe Tasks API...")
+        import mediapipe as mp
+        # Check if tasks module exists
+        if not hasattr(mp, 'tasks'):
+             logger.error("MediaPipe Tasks API also missing.")
+             return None
+             
+        model_path = _download_model_if_needed()
+        if not model_path:
+             logger.error("Could not download model for Tasks API.")
+             return None
+             
+        detector = MediaPipeTasksFaceDetector(model_path)
+        logger.info("Loaded MediaPipe face detector (Tasks API)")
+        return detector
+        
+    except Exception as e:
+        logger.error("Failed to load MediaPipe Tasks API: %s", e)
         return None
 
 
