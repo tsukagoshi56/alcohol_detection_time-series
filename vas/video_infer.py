@@ -62,48 +62,66 @@ def load_experiment_csv(csv_path: str) -> Dict[str, str]:
                 mapping[sid.strip()] = vpath.strip()
     return mapping
 
+import os
 
-class OpenCVFaceDetector:
-    """OpenCV DNN-based face detector wrapper."""
+
+class MediaPipeFaceDetector:
+    """MediaPipe face detector wrapper (same as training)."""
     
-    def __init__(self):
-        # Use OpenCV's built-in Haar cascade as fallback
-        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        self.cascade = cv2.CascadeClassifier(cascade_path)
+    def __init__(self, mp_face_detection):
+        self._detector = mp_face_detection.FaceDetection(
+            model_selection=1,  # Full-range model
+            min_detection_confidence=0.5,
+        )
         self._closed = False
     
-    def detect(self, frame_rgb):
-        """Detect faces and return bounding boxes as (x, y, w, h)."""
+    def process(self, frame_rgb):
+        """Run face detection on RGB frame."""
         if self._closed:
-            return []
-        gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
-        faces = self.cascade.detectMultiScale(
-            gray, 
-            scaleFactor=1.1, 
-            minNeighbors=5, 
-            minSize=(60, 60)
-        )
-        return faces
+            return None
+        return self._detector.process(frame_rgb)
     
     def close(self):
+        if not self._closed and self._detector is not None:
+            self._detector.close()
         self._closed = True
 
 
 def _load_face_detector():
-    """Load OpenCV face detector.
+    """Load MediaPipe face detector with GPU conflict workaround.
     
-    Returns OpenCVFaceDetector or None if unavailable.
+    Forces MediaPipe to use CPU by temporarily hiding CUDA devices,
+    which prevents conflicts with PyTorch's GPU usage.
     """
     try:
-        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        if not Path(cascade_path).exists():
-            logger.error("OpenCV Haar cascade not found: %s", cascade_path)
-            return None
-        detector = OpenCVFaceDetector()
-        logger.info("Loaded OpenCV Haar cascade face detector")
+        # Save original CUDA setting
+        original_cuda_devices = os.environ.get('CUDA_VISIBLE_DEVICES', None)
+        
+        # Hide GPU from MediaPipe to force CPU mode
+        os.environ['CUDA_VISIBLE_DEVICES'] = ''
+        logger.info("Forcing MediaPipe to CPU by setting CUDA_VISIBLE_DEVICES=''")
+        
+        # Import MediaPipe with GPU hidden
+        import mediapipe as mp
+        
+        # Restore CUDA for PyTorch
+        if original_cuda_devices is None:
+            if 'CUDA_VISIBLE_DEVICES' in os.environ:
+                del os.environ['CUDA_VISIBLE_DEVICES']
+        else:
+            os.environ['CUDA_VISIBLE_DEVICES'] = original_cuda_devices
+        logger.info("Restored CUDA_VISIBLE_DEVICES for PyTorch")
+        
+        # Create detector
+        detector = MediaPipeFaceDetector(mp.solutions.face_detection)
+        logger.info("Loaded MediaPipe face detector (CPU mode)")
         return detector
+        
+    except ImportError as e:
+        logger.error("MediaPipe not installed: %s", e)
+        return None
     except Exception as e:
-        logger.error("Failed to load face detector: %s", e)
+        logger.error("Failed to load MediaPipe face detector: %s", e)
         return None
 
 
@@ -179,7 +197,10 @@ def _extract_frame(
     transform,
     device: torch.device,
 ) -> Optional[torch.Tensor]:
-    """Extract and preprocess a single frame from video at time t_sec."""
+    """Extract and preprocess a single frame from video at time t_sec.
+    
+    Uses the same face detection and cropping logic as the training code.
+    """
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:
         return None
@@ -193,24 +214,34 @@ def _extract_frame(
     # Convert BGR to RGB
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     
-    # Detect face and crop if detector available
+    # Detect face and crop using MediaPipe (same as training)
     if detector is not None:
         try:
-            faces = detector.detect(frame_rgb)
-            if len(faces) > 0:
-                # Get largest face
-                x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+            results = detector.process(frame_rgb)
+            if results and results.detections:
+                det = results.detections[0]
+                bbox = det.location_data.relative_bounding_box
+                h, w, _ = frame.shape
                 
-                # Add margin (20%)
-                margin = int(0.2 * max(w, h))
-                x1 = max(0, x - margin)
-                y1 = max(0, y - margin)
-                x2 = min(frame_rgb.shape[1], x + w + margin)
-                y2 = min(frame_rgb.shape[0], y + h + margin)
+                x1 = max(int(bbox.xmin * w), 0)
+                y1 = max(int(bbox.ymin * h), 0)
+                x2 = min(x1 + int(bbox.width * w), w)
+                y2 = min(y1 + int(bbox.height * h), h)
                 
-                frame_rgb = frame_rgb[y1:y2, x1:x2]
+                if x1 < x2 and y1 < y2:
+                    # Crop and resize to 224x224 (same as training)
+                    face_crop = frame_rgb[y1:y2, x1:x2]
+                    face_crop = cv2.resize(face_crop, (224, 224))
+                    frame_rgb = face_crop
+                else:
+                    logger.debug("Invalid face bbox at t=%.2fs", t_sec)
+                    return None
+            else:
+                logger.debug("No face detected at t=%.2fs", t_sec)
+                return None
         except Exception as e:
-            logger.debug("Face detection failed: %s", e)
+            logger.debug("Face detection failed at t=%.2fs: %s", t_sec, e)
+            return None
     
     # Apply transform
     try:
