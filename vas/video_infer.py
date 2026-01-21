@@ -279,32 +279,53 @@ def parse_session_id(session_id: str) -> Optional[VideoInfo]:
 
 
 def find_video_file(video_root: str, info: VideoInfo) -> Optional[str]:
-    """Search for video file matching the session info."""
+    """Search for video file matching the session info recursively.
+    
+    Target format based on user report:
+    Directory: {date}_.../カメラデータ/
+    File: {yymmdd}_{subj_id}.mp4 (e.g., 241015_111.mp4)
+    Also supports standard patterns.
+    """
     root = Path(video_root)
     if not root.exists():
         return None
+        
+    # Prepare search patterns
+    # pattern 1: {yymmdd}_{subj_id}.mp4 (e.g. 241015_111.mp4)
+    yymmdd = info.date[2:] if len(info.date) == 8 else info.date
+    target_name_1 = f"{yymmdd}_{info.subject_id}.mp4"
     
-    # Common video extensions
-    extensions = [".mp4", ".avi", ".mov", ".mkv"]
+    # pattern 2: {date}_{subj_id}.mp4 (e.g. 20241015_111.mp4)
+    target_name_2 = f"{info.date}_{info.subject_id}.mp4"
     
-    # Try different naming patterns
-    patterns = [
-        f"{info.session_id}",
-        f"{info.subject_id}_{info.date}_{info.condition}_{info.trial}",
-        f"subject{info.subject_id}_{info.date}_{info.condition}",
-    ]
-    
-    for pattern in patterns:
-        for ext in extensions:
-            # Direct match
-            candidate = root / f"{pattern}{ext}"
-            if candidate.exists():
-                return str(candidate)
+    # pattern 3: {subj_id}_{date}.mp4
+    target_name_3 = f"{info.subject_id}_{info.date}.mp4"
+
+    # Recursive search
+    try:
+        # Try finding by filename first (fastest and most specific)
+        candidates = list(root.rglob(target_name_1))
+        if candidates:
+            return str(candidates[0])
             
-            # Search in subdirectories
-            for match in root.rglob(f"*{pattern}*{ext}"):
-                return str(match)
-    
+        candidates = list(root.rglob(target_name_2))
+        if candidates:
+            return str(candidates[0])
+            
+        candidates = list(root.rglob(target_name_3))
+        if candidates:
+            return str(candidates[0])
+            
+        # Try finding roughly
+        # {subj_id} and {date} in filename
+        for ext in [".mp4", ".avi", ".mov"]:
+            candidates = list(root.rglob(f"*{info.subject_id}*{yymmdd}*{ext}"))
+            if candidates:
+                return str(candidates[0])
+
+    except Exception as e:
+        logger.debug("Error during recursive search: %s", e)
+        
     return None
 
 
