@@ -76,6 +76,7 @@ def parse_args() -> argparse.Namespace:
     p_viz.add_argument("--smooth-window-sec", type=int, default=None)
 
     p_viz_video = sub.add_parser("visualize-video", help="Run visualization directly from videos")
+    p_viz_video.add_argument("--run-dir", required=True, help="Directory containing config.json and model_best.pt")
     p_viz_video.add_argument("--output-dir", required=True)
     p_viz_video.add_argument("--video-root", default="/home/user/alcohol_exp/database")
     p_viz_video.add_argument("--experiment-csv", default=None, help="Path to csv mapping session_id to video_path")
@@ -493,10 +494,12 @@ def main() -> None:
     if args.command == "visualize-video":
         from vas.video_infer import run_video_visualization
 
+        run_dir = args.run_dir
         output_dir = args.output_dir
-        cfg_path = Path(output_dir) / "config.json"
+
+        cfg_path = Path(run_dir) / "config.json"
         if not cfg_path.exists():
-            raise FileNotFoundError(f"config.json not found in {output_dir}")
+            raise FileNotFoundError(f"config.json not found in {run_dir}")
         cfg_data = json.loads(cfg_path.read_text(encoding="utf-8"))
         if args.index_path:
             cfg_data["index_path"] = args.index_path
@@ -512,19 +515,26 @@ def main() -> None:
 
         sessions = load_sessions(cfg.index_path)
         splits = split_by_subject(sessions, cfg.n_folds, cfg.seed, cfg.val_ratio)
+        
+        # Log to the output directory
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
         setup_logging(os.path.join(output_dir, "visualize_video.log"))
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         for fold_idx, (_, _, test_ids) in enumerate(splits):
             if args.fold is not None and (fold_idx + 1) != args.fold:
                 continue
-            fold_dir = Path(output_dir) / f"fold_{fold_idx}"
+            
+            # Load model from run_dir
+            fold_dir = Path(run_dir) / f"fold_{fold_idx}"
             model_path = fold_dir / "model_best.pt"
             if not model_path.exists():
                 logger.warning("Missing model for fold %s: %s", fold_idx + 1, model_path)
                 continue
             model = load_model(model_path, cfg, device)
-            out_dir = fold_dir / "video_timeseries"
+            
+            # Save output to output_dir
+            out_dir = Path(output_dir) / f"fold_{fold_idx}" / "video_timeseries"
             run_video_visualization(
                 cfg, 
                 str(out_dir), 
