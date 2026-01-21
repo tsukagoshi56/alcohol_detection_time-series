@@ -29,7 +29,7 @@ class SiameseResNet(nn.Module):
         self.feature_dim = net.fc.in_features
 
         self.head = nn.Sequential(
-            nn.Linear(self.feature_dim, 256),
+            nn.Linear(self.feature_dim * 3, 256),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
             nn.Linear(256, num_classes),
@@ -46,7 +46,10 @@ class SiameseResNet(nn.Module):
         anchor_feat = self._encode(anchor)
         target_feat = self._encode(target)
         diff = torch.abs(target_feat - anchor_feat)
-        return self.head(diff)
+        
+        # Concatenate: (B, feature_dim * 3)
+        combined = torch.cat([anchor_feat, target_feat, diff], dim=1)
+        return self.head(combined)
 
 
 def split_params(model: nn.Module) -> Tuple[list, list]:
