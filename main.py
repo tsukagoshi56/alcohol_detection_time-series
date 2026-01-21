@@ -10,7 +10,7 @@ import itertools
 import statistics
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import torch
 
