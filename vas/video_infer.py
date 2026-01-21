@@ -104,9 +104,15 @@ def _load_face_detector():
         import mediapipe as mp
         try:
             logger.info("MediaPipe location: %s", mp.__file__)
-            logger.info("MediaPipe dir(): %s", dir(mp))
-            import pkgutil
-            logger.info("MediaPipe submodules: %s", [name for _, name, _ in pkgutil.iter_modules(mp.__path__)])
+            mp_path = Path(mp.__file__).parent
+            logger.info("Listing mediapipe directory: %s", list(mp_path.glob("*")))
+            
+            python_path = mp_path / "python"
+            if python_path.exists():
+                logger.info("Listing mediapipe/python directory: %s", list(python_path.glob("*")))
+            else:
+                logger.warning("mediapipe/python directory does not exist!")
+                
         except Exception as e:
             logger.error("Debug info failed: %s", e)
             
