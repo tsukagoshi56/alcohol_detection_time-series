@@ -1,136 +1,111 @@
-# VAS 時系列（再構築版）
+# VAS 静止画モデル (ResNet)
 
-本プロジェクトは VAS 時系列パイプラインを、速度とデータフローの明確さを重視して再構築したものです。
+本プロジェクトは、顔画像からVAS（主観的アルコール感）を推定するモデルです。
+以前の時系列モデル (CNN+RNN) を廃止し、**単一フレームベースの静止画モデル (Siamese ResNet)** に変更しました。
 
 ## 基本方針
-- **Siamese モデル**: anchor = Normal 窓、target = VAS 窓。
-- **VAS=0 を特別クラス**として扱う。
-- **その他の VAS 値は (0, 100] を等間隔 bin に分割**。
+- **Siamese モデル**: 
+  - Anchor: 最初の5分間 (0-5分) の Normal 状態からランダムに選ばれたフレーム。
+  - Target: 推定対象のフレーム。
+  - 入力: 2枚の画像を ResNet Backbone に通し、特徴量の差分を分類器に入力。
+- **クラス分類**:
+  - class0: VAS = 0 (Normal)
+  - class1..: VAS > 0 を等間隔に分割 (例: 1-50, 51-100)
 
-`--num-classes 3` の例:
-- class0: VAS = 0
-- class1: VAS = 1..50
-- class2: VAS = 51..100
+## 環境構築 (uv)
+
+本プロジェクトはパッケージマネージャーとして `uv` を使用します。
+
+### インストール
+まだ `uv` がない場合:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### 依存関係の同期
+プロジェクトルートで以下を実行して環境を構築します:
+```bash
+uv sync
+```
 
 ## データ
-本コードは、事前抽出済みの顔画像（**3 fps**）を読み込みます:
+事前抽出済みの顔画像（png/jpg）を使用します。
+デフォルトパス: `../vas_detection/face_data_vas` (環境に合わせて変更してください)
 
+ファイル名フォーマット例:
 ```
-/home/user/alcohol_exp/workspace/vas_detection/face_data_vas
+subj101_normal_t73s_f1100.png
+subj101_vas20min_t919s_f13793_vas2_class0.png
 ```
-
-ファイル名フォーマット（抽出時）:
-```
-subj102_normal_t73s_f1100.png
-subj102_vas20min_t919s_f13793_vas2_class0.png
-```
-
-インデクサが解析する情報:
-- 被験者ID
-- セッションID（フォルダ名）
-- 時刻（秒）
-- VAS 値（存在する場合）
 
 ## クイックスタート
 
-インデックス作成:
+すべてのコマンドは `uv run` を介して実行します。
+
+### 1. インデックス作成
+画像ファイルのリストを作成します。
 
 ```bash
-python main.py index \
-  --data-root /home/user/alcohol_exp/workspace/vas_detection/face_data_vas \
+uv run main.py index \
+  --data-root /path/to/face_data_vas \
   --index-path data/index.jsonl
 ```
 
-学習（K-fold、デフォルト 9）:
+### 2. 学習 (K-fold Cross Validation)
+デフォルトは 9-fold です。
 
 ```bash
-python main.py train \
+uv run main.py train \
+  --data-root /path/to/face_data_vas \
   --num-classes 3 \
   --n-folds 9 \
-  --batch-size 64 \
-  --epochs 50
+  --batch-size 32 \
+  --epochs 50 \
+  --output-dir outputs/experiment_v1
 ```
 
-出力:
-```
-outputs/run_YYYYmmdd_HHMMSS/
-  config.json
-  train.log
-  cv_results.csv
-  fold_0/
-    model_best.pt
-    metrics.json
-    timeseries/
-      <session>_timeseries.csv
-      <session>_timeseries.png
-```
+**主なオプション:**
+- `--clip-sec`: 推論単位の時間窓（秒）。デフォルト5秒。この期間から1フレームをサンプリングします。
+- `--backbone`: `resnet18` (デフォルト) または `resnet34`。
+- `--train-samples-per-group`: 1つのVAS区間から学習に使うサンプル数。
 
-可視化のみ実行:
+### 3. 可視化
+学習済みモデルを使って推論結果をプロットします。
+
 ```bash
-python main.py visualize --output-dir outputs/run_YYYYmmdd_HHMMSS
-```
-
-10秒間隔の粗い推論:
-```bash
-python main.py visualize --output-dir outputs/run_YYYYmmdd_HHMMSS --infer-stride-sec 10
-```
-
-動画から直接可視化（未抽出区間もカバー）:
-```bash
-python main.py visualize-video \
-  --output-dir outputs/run_YYYYmmdd_HHMMSS \
-  --video-root /home/user/alcohol_exp/database \
+uv run main.py visualize \
+  --output-dir outputs/experiment_v1 \
   --infer-stride-sec 10
 ```
 
-CV 指標の要約（accuracy / macro F1 / class0 precision/recall/F1）:
+### 4. 動画からの直接推論
+抽出済み画像がない動画ファイルに対しても推論可能です (MediaPipeが必要)。
+
 ```bash
-python main.py summarize-f1 --output-dir outputs/run_YYYYmmdd_HHMMSS
+uv run main.py visualize-video \
+  --output-dir outputs/viz_video \
+  --video-root /path/to/videos \
+  --infer-stride-sec 5
 ```
 
-outputs 直下の全 run を要約:
-```bash
-python main.py summarize-f1 --outputs-root outputs
+## 出力フォルダ構成
+```
+outputs/experiment_v1/
+  config.json          # 学習設定
+  train.log            # ログ
+  cv_results.csv       # 全foldのスコア
+  fold_0/              # foldごとのディレクトリ
+    model_best.pt      # 最良モデル
+    metrics.json       # 指標
+    timeseries/        # 時系列プロット
+      subj101_...timeseries.png
+      subj101_...timeseries.csv
 ```
 
-要約 CSV を出力:
-```bash
-python main.py summarize-f1 --outputs-root outputs --csv-out outputs/summary.csv
-```
+## ハイパーパラメータ探索
+Config オブジェクト (`vas/config.py`) またはコマンドライン引数で調整可能です。
+小規模な探索には `sweep` コマンドも利用できます。
 
-小規模ハイパラスイープ（簡易検証）:
 ```bash
-python main.py sweep \
-  --output-root outputs \
-  --n-folds 3 \
-  --epochs 10 \
-  --lrs 1e-4,3e-4 \
-  --batch-sizes 32,64 \
-  --focal-gammas 2.0
+uv run main.py sweep --n-folds 3 --epochs 10 --lrs 1e-4,1e-3
 ```
-
-Optuna チューニング（小規模検証）:
-```bash
-/home/user/alcohol_exp/workspace/vas_detection/.venv/bin/python scripts/optuna_tune.py \
-  --output-root outputs \
-  --n-folds 3 \
-  --epochs 10 \
-  --n-trials 8 \
-  --lr-min 1e-4 \
-  --lr-max 3e-3 \
-  --batch-sizes 32,64 \
-  --focal-gammas 1.0,2.0 \
-  --flip-probs 0.0,0.5 \
-  --brightness-jitters 0.0,0.1 \
-  --contrast-jitters 0.0,0.1 \
-  --noise-stds 0.0,0.02
-```
-試行サマリは既定で `outputs/optuna_trials_*.csv` に出力されます（`--trial-csv` で変更可）。
-CUDA の pin-memory エラーが出る場合は `--no-pin-memory`（必要なら `--num-workers 0`）を追加してください。
-
-## 注意点
-- 時系列可視化は **5秒窓スライド**で、stride は調整可能です。
-- スムージング（移動平均）で確率曲線を平滑化します。
-- VAS=0 の precision/recall/F1 は `cv_results.csv` に含まれます。
-- Siamese の anchor は **0-5分**、VAS=0 の target は **5-10分**の normal 窓を使用します。
-- 可視化は抽出済みフレームに依存するため、全時間を必ずしもカバーしません。
