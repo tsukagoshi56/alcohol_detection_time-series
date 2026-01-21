@@ -11,4 +11,6 @@ dependencies = [
     "torch<2.3",
     "torchvision<0.18",
     "tqdm>=4.67.1",
+    "opencv-python",
+    "mediapipe",
 ]
