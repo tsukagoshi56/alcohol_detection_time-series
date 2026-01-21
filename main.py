@@ -78,6 +78,7 @@ def parse_args() -> argparse.Namespace:
     p_viz_video = sub.add_parser("visualize-video", help="Run visualization directly from videos")
     p_viz_video.add_argument("--output-dir", required=True)
     p_viz_video.add_argument("--video-root", default="/home/user/alcohol_exp/database")
+    p_viz_video.add_argument("--experiment-csv", default=None, help="Path to csv mapping session_id to video_path")
     p_viz_video.add_argument("--index-path", default=None)
     p_viz_video.add_argument("--fold", type=int, default=None, help="1-based fold number")
     p_viz_video.add_argument("--infer-stride-sec", type=int, default=None)
@@ -501,6 +502,10 @@ def main() -> None:
             cfg_data["index_path"] = args.index_path
         if args.infer_stride_sec is not None:
             cfg_data["infer_stride_sec"] = args.infer_stride_sec
+        else:
+            # Default to 10s stride for video viz as requested
+            cfg_data["infer_stride_sec"] = 10
+
         if args.smooth_window_sec is not None:
             cfg_data["smooth_window_sec"] = args.smooth_window_sec
         cfg = Config(**cfg_data)
@@ -520,7 +525,16 @@ def main() -> None:
                 continue
             model = load_model(model_path, cfg, device)
             out_dir = fold_dir / "video_timeseries"
-            run_video_visualization(cfg, str(out_dir), sessions, test_ids, args.video_root, model, device)
+            run_video_visualization(
+                cfg, 
+                str(out_dir), 
+                sessions, 
+                test_ids, 
+                args.video_root, 
+                model, 
+                device,
+                experiment_csv=args.experiment_csv
+            )
         return
 
     if args.command == "summarize-f1":

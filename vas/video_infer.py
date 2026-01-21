@@ -19,6 +19,9 @@ from .visualize import save_timeseries_plot
 logger = logging.getLogger(__name__)
 
 
+import csv
+from datetime import datetime
+
 @dataclass
 class VideoInfo:
     session_id: str
@@ -26,131 +29,38 @@ class VideoInfo:
     date: str
     condition: str
     trial: str
+    video_path: Optional[str] = None
 
 
-SESSION_RE = re.compile(r"^subj(?P<sid>\d+)_(?P<date>\d{8})_(?P<cond>.+)(?P<trial>\d{2})$")
+def load_experiment_csv(csv_path: str) -> Dict[str, str]:
+    """Load experiment CSV and return a mapping of session_id -> video_path."""
+    mapping = {}
+    path = Path(csv_path)
+    if not path.exists():
+        logger.warning("Experiment CSV not found: %s", csv_path)
+        return mapping
 
-
-def parse_session_id(session_id: str) -> Optional[VideoInfo]:
-    match = SESSION_RE.match(session_id)
-    if not match:
-        return None
-    return VideoInfo(
-        session_id=session_id,
-        subject_id=int(match.group("sid")),
-        date=match.group("date"),
-        condition=match.group("cond"),
-        trial=match.group("trial"),
-    )
-
-
-def _date_short(date: str) -> str:
-    return date[2:] if len(date) == 8 else date
-
-
-def find_video_file(video_root: str, info: VideoInfo) -> Optional[str]:
-    root = Path(video_root)
-    if not root.exists():
-        return None
-
-    date_short = _date_short(info.date)
-    subj_str = str(info.subject_id)
-
-    # Prefer a directory matching date/condition/trial
-    pattern_dir = f"{info.date}_*{info.condition}{info.trial}"
-    for cand in root.glob(pattern_dir):
-        cam_dir = cand / "カメラデータ"
-        if cam_dir.exists():
-            for mp4 in cam_dir.glob("*.mp4"):
-                name = mp4.name
-                if subj_str in name and date_short in name:
-                    return str(mp4)
-
-    # Fallback: any mp4 containing subject id and date short
-    for mp4 in root.rglob("*.mp4"):
-        name = mp4.name
-        if subj_str in name and date_short in name:
-            return str(mp4)
-
-    return None
-
-
-def _center_crop(img: np.ndarray) -> np.ndarray:
-    h, w = img.shape[:2]
-    size = min(h, w)
-    y0 = (h - size) // 2
-    x0 = (w - size) // 2
-    return img[y0:y0 + size, x0:x0 + size]
-
-
-def _load_face_detector():
-    try:
-        import mediapipe as mp
-    except Exception:
-        return None
-    return mp.solutions.face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
-
-
-def _detect_face(frame: np.ndarray, detector) -> Optional[np.ndarray]:
-    if detector is None:
-        return None
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    res = detector.process(rgb)
-    if res.detections:
-        det = res.detections[0]
-        bbox = det.location_data.relative_bounding_box
-        h, w = frame.shape[:2]
-        x1 = max(0, int(bbox.xmin * w))
-        y1 = max(0, int(bbox.ymin * h))
-        x2 = min(w, int((bbox.xmin + bbox.width) * w))
-        y2 = min(h, int((bbox.ymin + bbox.height) * h))
-        if x2 > x1 and y2 > y1:
-            return frame[y1:y2, x1:x2]
-    return None
-
-
-def _read_frame_at(cap: cv2.VideoCapture, t_sec: float) -> Optional[np.ndarray]:
-    cap.set(cv2.CAP_PROP_POS_MSEC, t_sec * 1000.0)
-    ok, frame = cap.read()
-    if not ok:
-        return None
-    return frame
-
-
-def _extract_frame(
-    cap: cv2.VideoCapture,
-    t_sec: float,
-    detector,
-    transform: ImageTransform,
-    device: torch.device,
-) -> Optional[torch.Tensor]:
-    frame = _read_frame_at(cap, t_sec)
-    if frame is None:
-        return None
-    face = _detect_face(frame, detector)
-    if face is None:
-        # Fallback: center crop if face not found? Or just skip using None
-        # For robustness let's try center crop if detector fails, to avoid too many gaps
-        # face = _center_crop(frame) # Optional fallback
-        return None
-    
-    face = cv2.resize(face, transform.size)
-    face = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
-    
-    # (H, W, C) -> (C, H, W)
-    img_tensor = torch.from_numpy(face).permute(2, 0, 1)
-    
-    # Apply transform and add batch dims (B, C, H, W)
-    img_tensor = transform(img_tensor).unsqueeze(0).to(device)
-    return img_tensor
-
-
-def _video_duration(cap: cv2.VideoCapture) -> float:
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps <= 0:
-        fps = 30.0
-    total = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    return float(total / fps) if total > 0 else 0.0
+    with path.open("r", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            # Expected columns: session_id, video_path, ...
+            # Adapt column names as needed based on the user's CSV structure description
+            # "experiment_time_only_sapporo.csv" likely has session_id and file path.
+            # Let's assume some flexibility or standard naming.
+            # If the user said: "experiment_time_only_sapporo.csv"
+            # We'll assume columns "session_id" and "video_path" or similar.
+            # Since we don't know the exact columns, let's look for "session_id" and "video_path".
+            # Or iterate and try to find logical columns.
+            
+            # User provided example path: /home/user/alcohol_exp/workspace/vas_detection/experiment_time_only_sapporo.csv
+            # We'll assume it has 'session_id' and 'video_path' or 'file_path'
+            
+            sid = row.get("session_id") or row.get("SessionID")
+            vpath = row.get("video_path") or row.get("FilePath") or row.get("path")
+            
+            if sid and vpath:
+                mapping[sid.strip()] = vpath.strip()
+    return mapping
 
 
 def run_video_visualization(
@@ -161,15 +71,17 @@ def run_video_visualization(
     video_root: str,
     model: torch.nn.Module,
     device: torch.device,
+    experiment_csv: Optional[str] = None,
 ) -> None:
     detector = _load_face_detector()
     if detector is None:
         logger.warning("MediaPipe not available; skipping video inference")
         return
 
-    if detector is None:
-        logger.warning("MediaPipe not available; skipping video inference")
-        return
+    csv_mapping = {}
+    if experiment_csv:
+        csv_mapping = load_experiment_csv(experiment_csv)
+        logger.info("Loaded %d video paths from CSV", len(csv_mapping))
 
     transform = ImageTransform(cfg, train=False)
     out_dir = Path(output_dir)
@@ -181,15 +93,29 @@ def run_video_visualization(
         if session is None:
             logger.warning("Session not found in index: %s", session_id)
             continue
-        info = parse_session_id(session_id)
-        if info is None:
-            logger.warning("Unable to parse session id: %s", session_id)
-            continue
-        video_path = find_video_file(video_root, info)
+        
+        video_path = None
+        if session_id in csv_mapping:
+            video_path = csv_mapping[session_id]
+        else:
+            # Fallback to parsing/searching logic
+            info = parse_session_id(session_id)
+            if info:
+                video_path = find_video_file(video_root, info)
+        
         if not video_path:
             logger.warning("Video not found for %s", session_id)
             continue
 
+        # Convert relative path in CSV to absolute if needed
+        if not Path(video_path).is_absolute() and video_root:
+             video_path = str(Path(video_root) / video_path)
+
+        if not Path(video_path).exists():
+             logger.warning("Video file does not exist: %s", video_path)
+             continue
+
+        logger.info("Processing %s: %s", session_id, video_path)
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             logger.warning("Failed to open video: %s", video_path)
@@ -217,8 +143,13 @@ def run_video_visualization(
         probs = []
         t = 0.0
         model.eval()
+        
+        # Use configurable stride
+        stride = cfg.infer_stride_sec
+        if stride <= 0:
+            stride = 10  # Default fallback if config is 0/invalid
+
         with torch.no_grad():
-            while t + cfg.clip_sec <= duration:
             while t + cfg.clip_sec <= duration:
                 # Sample middle frame of current window
                 mid_t = t + cfg.clip_sec / 2.0
@@ -230,13 +161,13 @@ def run_video_visualization(
                     device=device,
                 )
                 if target_tensor is None:
-                    t += cfg.infer_stride_sec
+                    t += stride
                     continue
                 logits = model(anchor_tensor, target_tensor)
                 prob = torch.softmax(logits, dim=1).cpu().numpy()[0]
-                times.append(t + cfg.clip_sec / 2.0)
+                times.append(mid_t)
                 probs.append(prob)
-                t += cfg.infer_stride_sec
+                t += stride
 
         cap.release()
 
