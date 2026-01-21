@@ -104,9 +104,19 @@ def _load_face_detector():
         import mediapipe as mp
         try:
             logger.info("MediaPipe location: %s", mp.__file__)
-        except Exception:
-            pass
+            logger.info("MediaPipe dir(): %s", dir(mp))
+            import pkgutil
+            logger.info("MediaPipe submodules: %s", [name for _, name, _ in pkgutil.iter_modules(mp.__path__)])
+        except Exception as e:
+            logger.error("Debug info failed: %s", e)
             
+        # Try importing solutions directly
+        try:
+            from mediapipe import solutions
+            mp.solutions = solutions
+        except ImportError:
+            pass
+
         # Explicitly try to import solutions if missing
         if not hasattr(mp, 'solutions'):
             logger.warning("mp.solutions not found, attempting explicit import...")
