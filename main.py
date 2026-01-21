@@ -17,7 +17,7 @@ import torch
 from vas.config import Config
 from vas.indexer import build_index
 from vas.dataset import load_sessions, split_by_subject
-from vas.models import SiameseResNetGRU
+from vas.models import SiameseResNet
 from vas.trainer import run_kfold
 from vas.utils import save_config, setup_logging
 from vas.visualize import predict_timeseries, save_timeseries_plot
@@ -39,13 +39,14 @@ def parse_args() -> argparse.Namespace:
     p_train.add_argument("--output-dir", default=None)
     p_train.add_argument("--num-classes", type=int, default=Config().num_classes)
     p_train.add_argument("--clip-sec", type=int, default=Config().clip_sec)
-    p_train.add_argument("--seq-len", type=int, default=Config().seq_len)
     p_train.add_argument("--n-folds", type=int, default=Config().n_folds)
     p_train.add_argument("--batch-size", type=int, default=Config().batch_size)
     p_train.add_argument("--epochs", type=int, default=Config().epochs)
     p_train.add_argument("--lr", type=float, default=Config().lr)
     p_train.add_argument("--backbone", default=Config().backbone)
     p_train.add_argument("--pretrained", action="store_true")
+
+    # ... other args ...
     p_train.add_argument("--no-pretrained", action="store_true")
     p_train.add_argument("--no-amp", action="store_true")
     p_train.add_argument("--num-workers", type=int, default=Config().num_workers)
@@ -93,7 +94,6 @@ def parse_args() -> argparse.Namespace:
     p_sweep.add_argument("--output-root", default=Config().output_dir)
     p_sweep.add_argument("--num-classes", type=int, default=Config().num_classes)
     p_sweep.add_argument("--clip-sec", type=int, default=Config().clip_sec)
-    p_sweep.add_argument("--seq-len", type=int, default=Config().seq_len)
     p_sweep.add_argument("--n-folds", type=int, default=3)
     p_sweep.add_argument("--epochs", type=int, default=10)
     p_sweep.add_argument("--early-stop-patience", type=int, default=5)
@@ -128,14 +128,11 @@ def ensure_index(data_root: str, index_path: str) -> None:
         logger.info("Index built: sessions=%s images=%s skipped=%s", stats.sessions, stats.images, stats.skipped)
 
 
-def load_model(checkpoint_path: Path, cfg: Config, device: torch.device) -> SiameseResNetGRU:
-    model = SiameseResNetGRU(
+def load_model(checkpoint_path: Path, cfg: Config, device: torch.device) -> SiameseResNet:
+    model = SiameseResNet(
         num_classes=cfg.num_classes,
         backbone=cfg.backbone,
         pretrained=False,
-        rnn_hidden=cfg.rnn_hidden,
-        rnn_layers=cfg.rnn_layers,
-        bidirectional=cfg.bidirectional,
         dropout=cfg.dropout,
     )
     state = torch.load(checkpoint_path, map_location=device)["model"]
@@ -359,7 +356,6 @@ def run_sweep(args: argparse.Namespace) -> None:
             output_dir=str(output_dir),
             num_classes=args.num_classes,
             clip_sec=args.clip_sec,
-            seq_len=args.seq_len,
             n_folds=args.n_folds,
             batch_size=batch_size,
             epochs=args.epochs,
@@ -440,7 +436,6 @@ def main() -> None:
             output_dir=output_dir,
             num_classes=args.num_classes,
             clip_sec=args.clip_sec,
-            seq_len=args.seq_len,
             n_folds=args.n_folds,
             batch_size=args.batch_size,
             epochs=args.epochs,

@@ -47,36 +47,41 @@ class Sample:
     label: int
 
 
-class SequenceTransform:
+class ImageTransform:
     def __init__(self, cfg: Config, train: bool):
         self.train = train
         self.size = cfg.img_size
-        self.mean = torch.tensor(cfg.mean).view(1, 3, 1, 1)
-        self.std = torch.tensor(cfg.std).view(1, 3, 1, 1)
+        self.mean = torch.tensor(cfg.mean).view(3, 1, 1)
+        self.std = torch.tensor(cfg.std).view(3, 1, 1)
         self.flip_prob = cfg.flip_prob
         self.brightness_jitter = cfg.brightness_jitter
         self.contrast_jitter = cfg.contrast_jitter
         self.noise_std = cfg.noise_std
 
-    def __call__(self, seq: torch.Tensor) -> torch.Tensor:
-        # seq: (T, C, H, W), uint8
-        seq = seq.float() / 255.0
+    def __call__(self, img: torch.Tensor) -> torch.Tensor:
+        # img: (C, H, W), uint8
+        img = img.float() / 255.0
         if self.train and self.flip_prob > 0 and random.random() < self.flip_prob:
-            seq = torch.flip(seq, dims=[3])
+            img = torch.flip(img, dims=[2])
         if self.train and self.brightness_jitter > 0:
             factor = 1.0 + random.uniform(-self.brightness_jitter, self.brightness_jitter)
-            seq = seq * factor
+            img = img * factor
         if self.train and self.contrast_jitter > 0:
             factor = 1.0 + random.uniform(-self.contrast_jitter, self.contrast_jitter)
-            mean = seq.mean(dim=(0, 2, 3), keepdim=True)
-            seq = (seq - mean) * factor + mean
+            mean = img.mean(dim=(1, 2), keepdim=True)
+            img = (img - mean) * factor + mean
         if self.train and self.noise_std > 0:
-            seq = seq + torch.randn_like(seq) * self.noise_std
+            img = img + torch.randn_like(img) * self.noise_std
         if self.train:
-            seq = torch.clamp(seq, 0.0, 1.0)
-        seq = F.interpolate(seq, size=self.size, mode="bilinear", align_corners=False)
-        seq = (seq - self.mean) / self.std
-        return seq
+            img = torch.clamp(img, 0.0, 1.0)
+        
+        # Resize/Crop
+        # For simplicity, just resize to target size. 
+        # In production, might want Resize + RandomCrop for training.
+        img = F.interpolate(img.unsqueeze(0), size=self.size, mode="bilinear", align_corners=False).squeeze(0)
+        
+        img = (img - self.mean) / self.std
+        return img
 
 
 def quantize_vas(vas_value: int, num_classes: int) -> int:
@@ -97,14 +102,10 @@ def _select_frames(frames: List[Frame], start_sec: float, clip_sec: int) -> List
     return selected
 
 
-def _sample_sequence(frames: List[Frame], seq_len: int) -> List[Frame]:
-    if len(frames) >= seq_len:
-        idxs = torch.linspace(0, len(frames) - 1, seq_len).long().tolist()
-        return [frames[i] for i in idxs]
+def _sample_frame(frames: List[Frame]) -> Frame:
     if not frames:
-        return []
-    pad = [frames[-1]] * (seq_len - len(frames))
-    return frames + pad
+        raise ValueError("No frames to sample from")
+    return random.choice(frames)
 
 
 def _pick_start(frames: List[Frame], clip_sec: int, mode: str) -> float:
@@ -220,7 +221,7 @@ class SiameseVasDataset(Dataset):
         self.sessions = sessions
         self.cfg = cfg
         self.split = split
-        self.transform = SequenceTransform(cfg, train=(split == "train"))
+        self.transform = ImageTransform(cfg, train=(split == "train"))
 
         samples_per_group = {
             "train": cfg.train_samples_per_group,
@@ -259,15 +260,20 @@ class SiameseVasDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def _load_sequence(self, frames: List[Frame]) -> torch.Tensor:
-        imgs = []
-        for f in frames:
-            img = read_image(f.path)
-            if img.shape[0] == 4:
-                img = img[:3]
-            imgs.append(img)
-        seq = torch.stack(imgs, dim=0)
-        return self.transform(seq)
+    def _load_image(self, frame: Frame) -> torch.Tensor:
+        try:
+            img = read_image(frame.path)
+        except Exception as e:
+            # Fallback for empty or corrupt images (should not happen often)
+            print(f"Error reading {frame.path}: {e}")
+            return torch.zeros((3, self.cfg.img_size[0], self.cfg.img_size[1]))
+
+        if img.shape[0] == 4:
+            img = img[:3]
+        elif img.shape[0] == 1:
+            img = img.repeat(3, 1, 1)
+            
+        return self.transform(img)
 
     def __getitem__(self, idx: int):
         sample = self.samples[idx]
@@ -277,19 +283,20 @@ class SiameseVasDataset(Dataset):
         anchor_mode = "random" if self.split == "train" else "center"
         target_mode = "random" if self.split == "train" else "center"
 
+        # Sampling logic:
+        # Instead of sequence, we grab a clip (time window) and sample ONE frame from it.
+        # This keeps the logic similar (we focus on a specific time window) but returns a single image.
+        
         anchor_start = _pick_start(session.anchor_frames, self.cfg.clip_sec, anchor_mode)
-        anchor_frames = _select_frames(session.anchor_frames, anchor_start, self.cfg.clip_sec)
-        anchor_frames = _sample_sequence(anchor_frames, self.cfg.seq_len)
+        anchor_candidates = _select_frames(session.anchor_frames, anchor_start, self.cfg.clip_sec)
+        anchor_frame = _sample_frame(anchor_candidates)
 
         target_start = _pick_start(group.frames, self.cfg.clip_sec, target_mode)
-        target_frames = _select_frames(group.frames, target_start, self.cfg.clip_sec)
-        target_frames = _sample_sequence(target_frames, self.cfg.seq_len)
+        target_candidates = _select_frames(group.frames, target_start, self.cfg.clip_sec)
+        target_frame = _sample_frame(target_candidates)
 
-        if not anchor_frames or not target_frames:
-            raise RuntimeError("Empty frame sequence after sampling")
-
-        anchor_seq = self._load_sequence(anchor_frames)
-        target_seq = self._load_sequence(target_frames)
+        anchor_img = self._load_image(anchor_frame)
+        target_img = self._load_image(target_frame)
 
         meta = {
             "session_id": session.session_id,
@@ -297,9 +304,11 @@ class SiameseVasDataset(Dataset):
             "group_id": group.group_id,
             "vas_value": group.vas_value,
             "vas_time_min": group.vas_time_min,
+            "anchor_time": anchor_frame.time_sec,
+            "target_time": target_frame.time_sec,
         }
 
-        return anchor_seq, target_seq, sample.label, meta
+        return anchor_img, target_img, sample.label, meta
 
 
 def session_time_windows(
@@ -323,11 +332,10 @@ def session_time_windows(
     return starts
 
 
-def load_sequence_from_window(
+def load_frame_from_window(
     session: SessionData,
     start_sec: float,
     clip_sec: int,
-    seq_len: int,
-) -> List[Frame]:
+) -> Frame:
     frames = _select_frames(session.all_frames, start_sec, clip_sec)
-    return _sample_sequence(frames, seq_len)
+    return _sample_frame(frames)

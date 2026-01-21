@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 from .config import Config
-from .dataset import Frame, SessionData, SequenceTransform, load_sequence_from_window, session_time_windows
+from .dataset import Frame, SessionData, ImageTransform, load_frame_from_window, session_time_windows
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +37,12 @@ def _pick_start(frames: List[Frame], clip_sec: int) -> float:
     return float(min_t + (max_t - min_t - clip_sec) / 2.0)
 
 
-def _sample_sequence(frames: List[Frame], seq_len: int) -> List[Frame]:
-    if len(frames) >= seq_len:
-        idxs = np.linspace(0, len(frames) - 1, seq_len).astype(int).tolist()
-        return [frames[i] for i in idxs]
+def _sample_frame(frames: List[Frame]) -> Frame:
     if not frames:
-        return []
-    pad = [frames[-1]] * (seq_len - len(frames))
-    return frames + pad
+        raise ValueError("No frames")
+    # For visualization/stable inference, pick middle frame
+    idx = len(frames) // 2
+    return frames[idx]
 
 
 def predict_timeseries(
@@ -53,19 +51,22 @@ def predict_timeseries(
     cfg: Config,
     device: torch.device,
 ) -> Dict[str, np.ndarray]:
-    transform = SequenceTransform(cfg, train=False)
+    transform = ImageTransform(cfg, train=False)
 
     if not session.anchor_frames:
         raise ValueError(f"No anchor frames for session {session.session_id}")
 
     anchor_start = _pick_start(session.anchor_frames, cfg.clip_sec)
-    anchor_frames = [f for f in session.anchor_frames if anchor_start <= f.time_sec < anchor_start + cfg.clip_sec]
-    if not anchor_frames:
-        anchor_frames = session.anchor_frames[:]
-    anchor_frames = _sample_sequence(anchor_frames, cfg.seq_len)
-    anchor_seq = torch.stack([torchvision_read(f.path) for f in anchor_frames], dim=0)
-    anchor_seq = transform(anchor_seq).unsqueeze(0).to(device)
+    anchor_candidates = [f for f in session.anchor_frames if anchor_start <= f.time_sec < anchor_start + cfg.clip_sec]
+    if not anchor_candidates:
+        anchor_candidates = session.anchor_frames[:]
+    
+    anchor_frame = _sample_frame(anchor_candidates)
+    anchor_img = torchvision_read(anchor_frame.path)
+    # Add batch dim
+    anchor_tensor = transform(anchor_img).unsqueeze(0).to(device)
 
+    # For inference, we slide a window and pick ONE frame to represent that window
     starts = session_time_windows(session, cfg.clip_sec, cfg.infer_stride_sec, cfg.min_frames_per_window)
 
     times = []
@@ -74,12 +75,11 @@ def predict_timeseries(
     model.eval()
     with torch.no_grad():
         for start in starts:
-            frames = load_sequence_from_window(session, start, cfg.clip_sec, cfg.seq_len)
-            if not frames:
-                continue
-            target_seq = torch.stack([torchvision_read(f.path) for f in frames], dim=0)
-            target_seq = transform(target_seq).unsqueeze(0).to(device)
-            logits = model(anchor_seq, target_seq)
+            frame = load_frame_from_window(session, start, cfg.clip_sec)
+            target_img = torchvision_read(frame.path)
+            target_tensor = transform(target_img).unsqueeze(0).to(device)
+            
+            logits = model(anchor_tensor, target_tensor)
             prob = torch.softmax(logits, dim=1).cpu().numpy()[0]
             times.append(start + cfg.clip_sec / 2.0)
             probs.append(prob)

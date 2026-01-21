@@ -15,17 +15,16 @@ class Config:
     num_classes: int = 3  # class 0 is VAS=0, class 1.. are uniform bins over (0, 100]
 
     # Sampling
-    clip_sec: int = 5
-    seq_len: int = 15  # 3 fps * 5 sec
-    min_frames_per_window: int = 3
+    clip_sec: int = 5  # Used for grouping but not for seq len anymore
+    min_frames_per_window: int = 1
     anchor_end_sec: int = 300  # 0-5 min for Siamese anchor
     normal_target_start_sec: int = 300  # 5-10 min used as VAS=0 targets
     normal_target_end_sec: int = 600
 
     # Training samples per VAS window
-    train_samples_per_group: int = 6
-    val_samples_per_group: int = 1
-    test_samples_per_group: int = 1
+    train_samples_per_group: int = 30  # Increased since we grab single frames
+    val_samples_per_group: int = 5
+    test_samples_per_group: int = 5
 
     # CV
     n_folds: int = 9
@@ -35,9 +34,6 @@ class Config:
     # Model
     backbone: str = "resnet18"
     pretrained: bool = True
-    rnn_hidden: int = 256
-    rnn_layers: int = 2
-    bidirectional: bool = True
     dropout: float = 0.5
 
     # Optim

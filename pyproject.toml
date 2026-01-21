@@ -1,0 +1,14 @@
+[project]
+name = "alcohol-detection-vas"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "matplotlib>=3.9.4",
+    "numpy<2",
+    "optuna>=4.7.0",
+    "torch<2.3",
+    "torchvision<0.18",
+    "tqdm>=4.67.1",
+]

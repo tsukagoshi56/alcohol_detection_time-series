@@ -21,7 +21,7 @@ from tqdm import tqdm
 from .config import Config
 from .dataset import SiameseVasDataset, split_by_subject, load_sessions
 from .metrics import confusion_matrix, classification_report
-from .models import SiameseResNetGRU
+from .models import SiameseResNet
 
 logger = logging.getLogger(__name__)
 
@@ -186,13 +186,10 @@ def run_kfold(cfg: Config, output_dir: str) -> Tuple[List[Dict[str, float]], Lis
         val_loader = build_dataloader(val_ds, cfg, shuffle=False)
         test_loader = build_dataloader(test_ds, cfg, shuffle=False)
 
-        model = SiameseResNetGRU(
+        model = SiameseResNet(
             num_classes=cfg.num_classes,
             backbone=cfg.backbone,
             pretrained=cfg.pretrained,
-            rnn_hidden=cfg.rnn_hidden,
-            rnn_layers=cfg.rnn_layers,
-            bidirectional=cfg.bidirectional,
             dropout=cfg.dropout,
         )
 

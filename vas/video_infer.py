@@ -13,7 +13,7 @@ import numpy as np
 import torch
 
 from .config import Config
-from .dataset import SessionData, SequenceTransform
+from .dataset import SessionData, ImageTransform
 from .visualize import save_timeseries_plot
 
 logger = logging.getLogger(__name__)
@@ -117,34 +117,32 @@ def _read_frame_at(cap: cv2.VideoCapture, t_sec: float) -> Optional[np.ndarray]:
     return frame
 
 
-def _build_sequence(
+def _extract_frame(
     cap: cv2.VideoCapture,
-    start_sec: float,
-    clip_sec: int,
-    seq_len: int,
+    t_sec: float,
     detector,
-    transform: SequenceTransform,
+    transform: ImageTransform,
     device: torch.device,
 ) -> Optional[torch.Tensor]:
-    times = np.linspace(start_sec, start_sec + clip_sec, seq_len, endpoint=False)
-    frames = []
-    for t in times:
-        frame = _read_frame_at(cap, t)
-        if frame is None:
-            continue
-        face = _detect_face(frame, detector)
-        if face is None:
-            continue
-        face = cv2.resize(face, transform.size)
-        face = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
-        frames.append(torch.from_numpy(face).permute(2, 0, 1))
-
-    if not frames:
+    frame = _read_frame_at(cap, t_sec)
+    if frame is None:
         return None
-
-    seq = torch.stack(frames, dim=0)
-    seq = transform(seq).unsqueeze(0).to(device)
-    return seq
+    face = _detect_face(frame, detector)
+    if face is None:
+        # Fallback: center crop if face not found? Or just skip using None
+        # For robustness let's try center crop if detector fails, to avoid too many gaps
+        # face = _center_crop(frame) # Optional fallback
+        return None
+    
+    face = cv2.resize(face, transform.size)
+    face = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
+    
+    # (H, W, C) -> (C, H, W)
+    img_tensor = torch.from_numpy(face).permute(2, 0, 1)
+    
+    # Apply transform and add batch dims (B, C, H, W)
+    img_tensor = transform(img_tensor).unsqueeze(0).to(device)
+    return img_tensor
 
 
 def _video_duration(cap: cv2.VideoCapture) -> float:
@@ -169,7 +167,11 @@ def run_video_visualization(
         logger.warning("MediaPipe not available; skipping video inference")
         return
 
-    transform = SequenceTransform(cfg, train=False)
+    if detector is None:
+        logger.warning("MediaPipe not available; skipping video inference")
+        return
+
+    transform = ImageTransform(cfg, train=False)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -199,16 +201,14 @@ def run_video_visualization(
             logger.warning("Video too short: %s", video_path)
             continue
 
-        anchor_seq = _build_sequence(
+        anchor_tensor = _extract_frame(
             cap,
-            start_sec=0.0,
-            clip_sec=cfg.clip_sec,
-            seq_len=cfg.seq_len,
+            t_sec=cfg.clip_sec / 2.0, # Middle of anchor window
             detector=detector,
             transform=transform,
             device=device,
         )
-        if anchor_seq is None:
+        if anchor_tensor is None:
             cap.release()
             logger.warning("Anchor extraction failed: %s", session_id)
             continue
@@ -219,19 +219,20 @@ def run_video_visualization(
         model.eval()
         with torch.no_grad():
             while t + cfg.clip_sec <= duration:
-                target_seq = _build_sequence(
+            while t + cfg.clip_sec <= duration:
+                # Sample middle frame of current window
+                mid_t = t + cfg.clip_sec / 2.0
+                target_tensor = _extract_frame(
                     cap,
-                    start_sec=t,
-                    clip_sec=cfg.clip_sec,
-                    seq_len=cfg.seq_len,
+                    t_sec=mid_t,
                     detector=detector,
                     transform=transform,
                     device=device,
                 )
-                if target_seq is None:
+                if target_tensor is None:
                     t += cfg.infer_stride_sec
                     continue
-                logits = model(anchor_seq, target_seq)
+                logits = model(anchor_tensor, target_tensor)
                 prob = torch.softmax(logits, dim=1).cpu().numpy()[0]
                 times.append(t + cfg.clip_sec / 2.0)
                 probs.append(prob)
