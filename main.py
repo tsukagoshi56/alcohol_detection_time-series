@@ -148,7 +148,7 @@ def run_visualizations(
     cfg: Config,
     output_dir: str,
     splits: List[Tuple[List[str], List[str], List[str]]],
-    only_fold: int | None = None,
+    only_fold: Optional[int] = None,
 ) -> None:
     sessions = load_sessions(cfg.index_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
