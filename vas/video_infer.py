@@ -87,72 +87,113 @@ class MediaPipeFaceDetector:
         self._closed = True
 
 
-def _load_face_detector():
-    """Load MediaPipe face detector with GPU conflict workaround.
+class OpenCVFaceDetector:
+    """OpenCV face detector wrapper to mimic MediaPipe interface."""
     
-    Forces MediaPipe to use CPU by temporarily hiding CUDA devices,
-    which prevents conflicts with PyTorch's GPU usage.
+    def __init__(self):
+        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        if not Path(cascade_path).exists():
+           raise RuntimeError(f"OpenCV Haar cascade not found at {cascade_path}")
+           
+        self.cascade = cv2.CascadeClassifier(cascade_path)
+        self._closed = False
+        
+    def process(self, frame_rgb):
+        """Detect faces and convert to MediaPipe-like result format."""
+        if self._closed:
+            return None
+            
+        gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
+        faces = self.cascade.detectMultiScale(
+            gray, 
+            scaleFactor=1.1, 
+            minNeighbors=5, 
+            minSize=(60, 60)
+        )
+        
+        if len(faces) == 0:
+            return None
+            
+        # Wrap the result to look like MediaPipe output
+        # Find largest face
+        x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+        
+        # Convert to relative bounding box
+        H, W = frame_rgb.shape[:2]
+        
+        class MockDetection:
+             def __init__(self, x, y, w, h):
+                 self.location_data = self.LocationData(x, y, w, h)
+                 
+             class LocationData:
+                 def __init__(self, x, y, w, h):
+                     self.relative_bounding_box = self.RelativeBoundingBox(x, y, w, h)
+                     
+                 class RelativeBoundingBox:
+                     def __init__(self, x, y, w, h):
+                         self.xmin = x / W
+                         self.ymin = y / H
+                         self.width = w / W
+                         self.height = h / H
+
+        return type('Result', (), {'detections': [MockDetection(x, y, w, h)]})()
+        
+    def close(self):
+        self._closed = True
+
+
+def _load_face_detector():
+    """Load face detector with fallback strategy.
+    
+    Strategy:
+    1. MediaPipe Solutions (Standard approach) - using GPU conflict workaround
+    2. OpenCV Haar Cascade (Fallback) - widely available
     """
+    # 1. Try MediaPipe
     try:
         # Save original CUDA setting
         original_cuda_devices = os.environ.get('CUDA_VISIBLE_DEVICES', None)
-        
-        # Hide GPU from MediaPipe to force CPU mode
+        # Hide GPU from MediaPipe
         os.environ['CUDA_VISIBLE_DEVICES'] = ''
         
-        # Import MediaPipe with GPU hidden
         import mediapipe as mp
-        try:
-            logger.info("MediaPipe location: %s", mp.__file__)
-            mp_path = Path(mp.__file__).parent
-            logger.info("Listing mediapipe directory: %s", list(mp_path.glob("*")))
-            
-            python_path = mp_path / "python"
-            if python_path.exists():
-                logger.info("Listing mediapipe/python directory: %s", list(python_path.glob("*")))
-            else:
-                logger.warning("mediapipe/python directory does not exist!")
-                
-        except Exception as e:
-            logger.error("Debug info failed: %s", e)
-            
-        # Try importing solutions directly
-        try:
-            from mediapipe import solutions
-            mp.solutions = solutions
-        except ImportError:
-            pass
-
-        # Explicitly try to import solutions if missing
-        if not hasattr(mp, 'solutions'):
-            logger.warning("mp.solutions not found, attempting explicit import...")
-            try:
-                import mediapipe.python.solutions as solutions
-                mp.solutions = solutions
-            except ImportError as e:
-                logger.error("Explicit import of mediapipe.python.solutions failed: %s", e)
         
-        # Restore CUDA for PyTorch
+        # Check if solutions is available (it might be missing in broken installs)
+        if hasattr(mp, 'solutions') and hasattr(mp.solutions, 'face_detection'):
+             detector = MediaPipeFaceDetector(mp.solutions.face_detection)
+             logger.info("Loaded MediaPipe face detector")
+             # Restore CUDA
+             if original_cuda_devices is None:
+                 if 'CUDA_VISIBLE_DEVICES' in os.environ:
+                     del os.environ['CUDA_VISIBLE_DEVICES']
+             else:
+                 os.environ['CUDA_VISIBLE_DEVICES'] = original_cuda_devices
+             return detector
+             
+        # Restore CUDA if we failed early
         if original_cuda_devices is None:
-            if 'CUDA_VISIBLE_DEVICES' in os.environ:
-                del os.environ['CUDA_VISIBLE_DEVICES']
+             if 'CUDA_VISIBLE_DEVICES' in os.environ:
+                 del os.environ['CUDA_VISIBLE_DEVICES']
         else:
-            os.environ['CUDA_VISIBLE_DEVICES'] = original_cuda_devices
-        
-        if not hasattr(mp, 'solutions'):
-            logger.error("mp.solutions is still missing after all attempts.")
-            return None
-
-        # Create detector
-        detector = MediaPipeFaceDetector(mp.solutions.face_detection)
-        logger.info("Loaded MediaPipe face detector")
-        return detector
-        
-    except ImportError as e:
-        logger.error("MediaPipe not installed: %s", e)
-        return None
+             os.environ['CUDA_VISIBLE_DEVICES'] = original_cuda_devices
+             
     except Exception as e:
-        logger.error("Failed to load MediaPipe face detector: %s", e)
+        logger.warning(f"MediaPipe load failed ({e}), falling back to OpenCV...")
+        # Ensure CUDA env is restored even after exception
+        if original_cuda_devices is None:
+             if 'CUDA_VISIBLE_DEVICES' in os.environ:
+                 del os.environ['CUDA_VISIBLE_DEVICES']
+        else:
+             os.environ['CUDA_VISIBLE_DEVICES'] = original_cuda_devices
+
+    # 2. Try OpenCV
+    try:
+        logger.info("Attempting to load OpenCV face detector as fallback...")
+        detector = OpenCVFaceDetector()
+        logger.info("Loaded OpenCV face detector (Fallback)")
+        return detector
+    except Exception as e:
+        logger.error("Failed to load OpenCV face detector: %s", e)
         return None
 
 
