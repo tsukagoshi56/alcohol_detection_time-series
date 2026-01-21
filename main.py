@@ -211,7 +211,7 @@ def _mean_std(values: List[float]) -> tuple[float, float]:
     return mean, std
 
 
-def _summarize_dir(output_dir: Path) -> dict | None:
+def _summarize_dir(output_dir: Path) -> Optional[dict]:
     input_path = output_dir / "cv_results.csv"
     if not input_path.exists():
         print(f"{output_dir.name}: cv_results.csv not found")
@@ -253,7 +253,7 @@ def _summarize_dir(output_dir: Path) -> dict | None:
     return summary
 
 
-def summarize_f1(output_dirs: List[str], outputs_root: str | None, csv_out: str | None) -> None:
+def summarize_f1(output_dirs: List[str], outputs_root: Optional[str], csv_out: Optional[str]) -> None:
     dirs: List[Path] = []
     for output_dir in output_dirs:
         dirs.append(Path(output_dir))
