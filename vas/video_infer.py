@@ -64,20 +64,35 @@ def load_experiment_csv(csv_path: str) -> Dict[str, str]:
 
 
 def _load_face_detector():
-    """Load MediaPipe face detection model."""
+    """Load MediaPipe face detection model.
+    
+    Returns None if MediaPipe is unavailable - inference will proceed without face cropping.
+    """
     try:
         import mediapipe as mp
-        mp_face_detection = mp.solutions.face_detection
-        detector = mp_face_detection.FaceDetection(
-            model_selection=1,  # Full-range model
-            min_detection_confidence=0.5,
-        )
-        return detector
+        # Try new API (mediapipe >= 0.10)
+        if hasattr(mp, 'solutions') and hasattr(mp.solutions, 'face_detection'):
+            mp_face_detection = mp.solutions.face_detection
+            detector = mp_face_detection.FaceDetection(
+                model_selection=1,
+                min_detection_confidence=0.5,
+            )
+            return detector
+        # Try legacy API
+        elif hasattr(mp, 'FaceDetection'):
+            detector = mp.FaceDetection(
+                model_selection=1,
+                min_detection_confidence=0.5,
+            )
+            return detector
+        else:
+            logger.info("MediaPipe available but face_detection not found. Proceeding without face cropping.")
+            return None
     except ImportError:
-        logger.warning("MediaPipe not installed. Install with: pip install mediapipe")
+        logger.info("MediaPipe not installed. Proceeding without face cropping.")
         return None
     except Exception as e:
-        logger.warning("Failed to load face detector: %s", e)
+        logger.info("Face detector unavailable (%s). Proceeding without face cropping.", e)
         return None
 
 
@@ -215,8 +230,7 @@ def run_video_visualization(
 ) -> None:
     detector = _load_face_detector()
     if detector is None:
-        logger.warning("MediaPipe not available; skipping video inference")
-        return
+        logger.info("Face detector not available; using full frames for inference")
 
     csv_mapping = {}
     if experiment_csv:
