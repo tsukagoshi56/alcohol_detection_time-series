@@ -255,10 +255,14 @@ def _load_face_detector():
 def parse_session_id(session_id: str) -> Optional[VideoInfo]:
     """Parse session ID to extract video information.
     
-    Expected format: subjectID_date_condition_trial
-    Example: 1_20230101_alcohol_1
+    Expected format: [subj]subjectID_date_condition_trial
+    Example: 
+      1_20230101_alcohol_1
+      subj121_20250801_本試験01
     """
-    pattern = r"^(\d+)_(\d{8})_(\w+)_(\d+)$"
+    # More flexible pattern: optional 'subj' or 'sub' prefix, then digits
+    # Then date, then rest
+    pattern = r"^(?:sub|subj)?(\d+)_(\d{8})_(.+)$"
     match = re.match(pattern, session_id)
     if not match:
         logger.debug("Could not parse session_id: %s", session_id)
@@ -266,9 +270,17 @@ def parse_session_id(session_id: str) -> Optional[VideoInfo]:
     
     subject_id = int(match.group(1))
     date = match.group(2)
-    condition = match.group(3)
-    trial = match.group(4)
+    rest = match.group(3)
     
+    # Try to extract trial if possible (digits at end)
+    trial = "1"
+    match_trial = re.search(r"(\d+)$", rest)
+    if match_trial:
+        trial = match_trial.group(1)
+        condition = rest[:match_trial.start()].rstrip('_')
+    else:
+        condition = rest
+
     return VideoInfo(
         session_id=session_id,
         subject_id=subject_id,
