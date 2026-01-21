@@ -63,36 +63,47 @@ def load_experiment_csv(csv_path: str) -> Dict[str, str]:
     return mapping
 
 
-def _load_face_detector():
-    """Load MediaPipe face detection model.
+class OpenCVFaceDetector:
+    """OpenCV DNN-based face detector wrapper."""
     
-    Returns None if MediaPipe is unavailable - inference will proceed without face cropping.
+    def __init__(self):
+        # Use OpenCV's built-in Haar cascade as fallback
+        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        self.cascade = cv2.CascadeClassifier(cascade_path)
+        self._closed = False
+    
+    def detect(self, frame_rgb):
+        """Detect faces and return bounding boxes as (x, y, w, h)."""
+        if self._closed:
+            return []
+        gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
+        faces = self.cascade.detectMultiScale(
+            gray, 
+            scaleFactor=1.1, 
+            minNeighbors=5, 
+            minSize=(60, 60)
+        )
+        return faces
+    
+    def close(self):
+        self._closed = True
+
+
+def _load_face_detector():
+    """Load OpenCV face detector.
+    
+    Returns OpenCVFaceDetector or None if unavailable.
     """
     try:
-        import mediapipe as mp
-        # Try new API (mediapipe >= 0.10)
-        if hasattr(mp, 'solutions') and hasattr(mp.solutions, 'face_detection'):
-            mp_face_detection = mp.solutions.face_detection
-            detector = mp_face_detection.FaceDetection(
-                model_selection=1,
-                min_detection_confidence=0.5,
-            )
-            return detector
-        # Try legacy API
-        elif hasattr(mp, 'FaceDetection'):
-            detector = mp.FaceDetection(
-                model_selection=1,
-                min_detection_confidence=0.5,
-            )
-            return detector
-        else:
-            logger.info("MediaPipe available but face_detection not found. Proceeding without face cropping.")
+        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        if not Path(cascade_path).exists():
+            logger.error("OpenCV Haar cascade not found: %s", cascade_path)
             return None
-    except ImportError:
-        logger.info("MediaPipe not installed. Proceeding without face cropping.")
-        return None
+        detector = OpenCVFaceDetector()
+        logger.info("Loaded OpenCV Haar cascade face detector")
+        return detector
     except Exception as e:
-        logger.info("Face detector unavailable (%s). Proceeding without face cropping.", e)
+        logger.error("Failed to load face detector: %s", e)
         return None
 
 
@@ -185,23 +196,17 @@ def _extract_frame(
     # Detect face and crop if detector available
     if detector is not None:
         try:
-            results = detector.process(frame_rgb)
-            if results.detections:
-                detection = results.detections[0]
-                bbox = detection.location_data.relative_bounding_box
-                h, w = frame_rgb.shape[:2]
+            faces = detector.detect(frame_rgb)
+            if len(faces) > 0:
+                # Get largest face
+                x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
                 
-                x1 = max(0, int(bbox.xmin * w))
-                y1 = max(0, int(bbox.ymin * h))
-                x2 = min(w, int((bbox.xmin + bbox.width) * w))
-                y2 = min(h, int((bbox.ymin + bbox.height) * h))
-                
-                # Add margin
-                margin = int(0.2 * max(x2 - x1, y2 - y1))
-                x1 = max(0, x1 - margin)
-                y1 = max(0, y1 - margin)
-                x2 = min(w, x2 + margin)
-                y2 = min(h, y2 + margin)
+                # Add margin (20%)
+                margin = int(0.2 * max(w, h))
+                x1 = max(0, x - margin)
+                y1 = max(0, y - margin)
+                x2 = min(frame_rgb.shape[1], x + w + margin)
+                y2 = min(frame_rgb.shape[0], y + h + margin)
                 
                 frame_rgb = frame_rgb[y1:y2, x1:x2]
         except Exception as e:
@@ -230,7 +235,8 @@ def run_video_visualization(
 ) -> None:
     detector = _load_face_detector()
     if detector is None:
-        logger.info("Face detector not available; using full frames for inference")
+        logger.error("Face detector is required for video inference. Please check OpenCV installation.")
+        return
 
     csv_mapping = {}
     if experiment_csv:
