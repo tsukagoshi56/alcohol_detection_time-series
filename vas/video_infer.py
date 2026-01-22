@@ -113,37 +113,43 @@ class MediaPipeTasksFaceDetector:
             return None
             
         import mediapipe as mp
-        # Convert numpy array to MediaPipe Image
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-        
-        # Detect
-        detection_result = self.detector.detect(mp_image)
-        
-        if not detection_result.detections:
+        try:
+            # Convert numpy array to MediaPipe Image
+            # Ensure contiguous array
+            if not frame_rgb.flags['C_CONTIGUOUS']:
+                frame_rgb = np.ascontiguousarray(frame_rgb)
+                
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+            
+            # Detect
+            detection_result = self.detector.detect(mp_image)
+            
+            if not detection_result.detections:
+                logger.warning("Tasks API: No face detected.")
+                return type('Result', (), {'detections': []})()
+                
+            # Convert format to match legacy Solutions API
+            H, W = frame_rgb.shape[:2]
+            
+            legacy_detections = []
+            for det in detection_result.detections:
+                bbox = det.bounding_box
+                # Normalize to [0, 1] as expected by the rest of the code
+                norm_box = type('RelativeBoundingBox', (), {
+                    'xmin': bbox.origin_x / W,
+                    'ymin': bbox.origin_y / H,
+                    'width': bbox.width / W,
+                    'height': bbox.height / H,
+                })()
+                
+                loc_data = type('LocationData', (), {'relative_bounding_box': norm_box})()
+                legacy_det = type('Detection', (), {'location_data': loc_data})()
+                legacy_detections.append(legacy_det)
+                
+            return type('Result', (), {'detections': legacy_detections})()
+        except Exception as e:
+            logger.warning("Tasks API process failed: %s", e)
             return type('Result', (), {'detections': []})()
-            
-        # Convert format to match legacy Solutions API
-        # Solutions API returns normalized [0,1] coordinates
-        # Tasks API returns bounding_box in PIXELS (origin top-left)
-        # We need to normalize them to match existing logic
-        H, W = frame_rgb.shape[:2]
-        
-        legacy_detections = []
-        for det in detection_result.detections:
-            bbox = det.bounding_box
-            # Normalize to [0, 1] as expected by the rest of the code
-            norm_box = type('RelativeBoundingBox', (), {
-                'xmin': bbox.origin_x / W,
-                'ymin': bbox.origin_y / H,
-                'width': bbox.width / W,
-                'height': bbox.height / H,
-            })()
-            
-            loc_data = type('LocationData', (), {'relative_bounding_box': norm_box})()
-            legacy_det = type('Detection', (), {'location_data': loc_data})()
-            legacy_detections.append(legacy_det)
-            
-        return type('Result', (), {'detections': legacy_detections})()
 
     def close(self):
         if not self._closed:
@@ -363,12 +369,14 @@ def _extract_frame(
     """
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:
+        logger.warning("Invalid FPS: %s", fps)
         return None
     
     frame_idx = int(t_sec * fps)
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
     ret, frame = cap.read()
     if not ret:
+        logger.warning("Could not read frame at t=%.2f", t_sec)
         return None
     
     # Convert BGR to RGB
@@ -394,13 +402,15 @@ def _extract_frame(
                     face_crop = cv2.resize(face_crop, (224, 224))
                     frame_rgb = face_crop
                 else:
-                    logger.debug("Invalid face bbox at t=%.2fs", t_sec)
+                    logger.warning("Invalid face bbox at t=%.2fs: %s", t_sec, bbox)
                     return None
             else:
-                logger.debug("No face detected at t=%.2fs", t_sec)
+                logger.warning("No face detected at t=%.2fs", t_sec)
+                # Save debug image
+                # cv2.imwrite(f"debug_no_face_{t_sec}.jpg", cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
                 return None
         except Exception as e:
-            logger.debug("Face detection failed at t=%.2fs: %s", t_sec, e)
+            logger.warning("Face detection failed at t=%.2fs: %s", t_sec, e)
             return None
     
     # Apply transform
@@ -410,7 +420,7 @@ def _extract_frame(
         tensor = transform(pil_img)
         return tensor.unsqueeze(0).to(device)
     except Exception as e:
-        logger.debug("Transform failed: %s", e)
+        logger.warning("Transform failed: %s", e)
         return None
 
 
