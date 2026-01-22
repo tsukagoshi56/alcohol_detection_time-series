@@ -415,9 +415,9 @@ def _extract_frame(
     
     # Apply transform
     try:
-        from PIL import Image
-        pil_img = Image.fromarray(frame_rgb)
-        tensor = transform(pil_img)
+        # Convert numpy (H, W, C) -> Tensor (C, H, W)
+        tensor_img = torch.from_numpy(frame_rgb).permute(2, 0, 1)
+        tensor = transform(tensor_img)
         return tensor.unsqueeze(0).to(device)
     except Exception as e:
         logger.warning("Transform failed: %s", e)
