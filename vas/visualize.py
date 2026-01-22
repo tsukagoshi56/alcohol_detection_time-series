@@ -142,12 +142,14 @@ def save_timeseries_plot(output_dir: Path, session: SessionData, data: Dict[str,
     ax.set_xlabel("Time (sec)")
     ax.set_ylabel("Probability")
     ax.set_ylim(0.0, 1.0)
-    ax.legend(loc="upper right", ncol=2)
+    # Move legend outside
+    ax.legend(bbox_to_anchor=(1.01, 1), loc='upper left', borderaxespad=0)
 
     vas_points = _collect_vas_points(session)
     for t_sec, v in vas_points:
-        # Shift VAS points by the same offset
-        t_sec_shifted = t_sec - offset
+        # VAS points are already relative to experiment start (e.g. 600s = 10min)
+        # So we do NOT subtract offset.
+        t_sec_shifted = t_sec 
         # Only plot if within visible range
         if 0 <= t_sec_shifted <= plot_times[-1]:
             ax.axvline(t_sec_shifted, color="gray", alpha=0.35, linewidth=1)
