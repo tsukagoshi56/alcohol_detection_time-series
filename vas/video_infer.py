@@ -125,7 +125,7 @@ class MediaPipeTasksFaceDetector:
             detection_result = self.detector.detect(mp_image)
             
             if not detection_result.detections:
-                logger.warning("Tasks API: No face detected.")
+                logger.debug("Tasks API: No face detected.")
                 return type('Result', (), {'detections': []})()
                 
             # Convert format to match legacy Solutions API
@@ -405,12 +405,12 @@ def _extract_frame(
                     logger.warning("Invalid face bbox at t=%.2fs: %s", t_sec, bbox)
                     return None
             else:
-                logger.warning("No face detected at t=%.2fs", t_sec)
+                logger.debug("No face detected at t=%.2fs", t_sec)
                 # Save debug image
                 # cv2.imwrite(f"debug_no_face_{t_sec}.jpg", cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
                 return None
         except Exception as e:
-            logger.warning("Face detection failed at t=%.2fs: %s", t_sec, e)
+            logger.debug("Face detection failed at t=%.2fs: %s", t_sec, e)
             return None
     
     # Apply transform
@@ -497,7 +497,7 @@ def run_video_visualization(
         )
         if anchor_tensor is None:
             cap.release()
-            logger.warning("Anchor extraction failed: %s", session_id)
+            logger.debug("Anchor extraction failed: %s", session_id)
             continue
 
         times = []
