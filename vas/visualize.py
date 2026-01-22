@@ -110,6 +110,8 @@ def save_timeseries_plot(output_dir: Path, session: SessionData, data: Dict[str,
     probs = data["probs"]
 
     smooth_window = max(1, int(cfg.smooth_window_sec / cfg.infer_stride_sec))
+    logger.info("Smoothing plot: window_sec=%d, stride_sec=%d => window_points=%d", 
+                cfg.smooth_window_sec, cfg.infer_stride_sec, smooth_window)
     smoothed = np.stack([
         _smooth(probs[:, i], smooth_window) for i in range(probs.shape[1])
     ], axis=1)
