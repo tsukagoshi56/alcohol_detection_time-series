@@ -32,35 +32,67 @@ class VideoInfo:
     video_path: Optional[str] = None
 
 
-def load_experiment_csv(csv_path: str) -> Dict[str, str]:
-    """Load experiment CSV and return a mapping of session_id -> video_path."""
-    mapping = {}
+@dataclass
+class ExperimentTiming:
+    start_sec: float
+    duration_sec: float
+
+def load_experiment_csv(csv_path: str) -> Tuple[Dict[str, str], Dict[Tuple[str, int], ExperimentTiming]]:
+    """Load experiment CSV and return (video_path_map, timing_map).
+    
+    Supports two formats:
+    1. Session/Path map: session_id, video_path
+    2. Sapporo Time map: date, participant_1..3, start_1..3, time
+    """
+    path_mapping = {}
+    timing_mapping = {}
+    
     path = Path(csv_path)
     if not path.exists():
         logger.warning("Experiment CSV not found: %s", csv_path)
-        return mapping
+        return path_mapping, timing_mapping
 
     with path.open("r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames or []
+        
+        # Check for Sapporo format
+        is_sapporo = "participant_1" in fieldnames and "start_1" in fieldnames
+        
         for row in reader:
-            # Expected columns: session_id, video_path, ...
-            # Adapt column names as needed based on the user's CSV structure description
-            # "experiment_time_only_sapporo.csv" likely has session_id and file path.
-            # Let's assume some flexibility or standard naming.
-            # If the user said: "experiment_time_only_sapporo.csv"
-            # We'll assume columns "session_id" and "video_path" or similar.
-            # Since we don't know the exact columns, let's look for "session_id" and "video_path".
-            # Or iterate and try to find logical columns.
-            
-            # User provided example path: /home/user/alcohol_exp/workspace/vas_detection/experiment_time_only_sapporo.csv
-            # We'll assume it has 'session_id' and 'video_path' or 'file_path'
-            
+            # 1. Path Mapping (Traditional)
             sid = row.get("session_id") or row.get("SessionID")
             vpath = row.get("video_path") or row.get("FilePath") or row.get("path")
-            
             if sid and vpath:
-                mapping[sid.strip()] = vpath.strip()
-    return mapping
+                path_mapping[sid.strip()] = vpath.strip()
+
+            # 2. Timing Mapping (Sapporo)
+            if is_sapporo:
+                try:
+                    date_val = row["date"].strip()
+                    duration_min = float(row["time"])
+                    duration_sec = duration_min * 60.0
+                    
+                    # Iterate over 3 participants
+                    for i in range(1, 4):
+                        p_key = f"participant_{i}"
+                        s_key = f"start_{i}"
+                        if row.get(p_key) and row.get(s_key):
+                            subj_id_str = row[p_key].strip()
+                            start_str = row[s_key].strip()
+                            if subj_id_str and start_str:
+                                subj_id = int(subj_id_str)
+                                start_sec = float(start_str)
+                                
+                                key = (date_val, subj_id)
+                                timing_mapping[key] = ExperimentTiming(
+                                    start_sec=start_sec,
+                                    duration_sec=duration_sec
+                                )
+                except ValueError as e:
+                    logger.debug("Skipping row in CSV parsing: %s (%s)", row, e)
+                    
+    return path_mapping, timing_mapping
 
 import os
 
@@ -440,9 +472,10 @@ def run_video_visualization(
         return
 
     csv_mapping = {}
+    timing_mapping = {}
     if experiment_csv:
-        csv_mapping = load_experiment_csv(experiment_csv)
-        logger.info("Loaded %d video paths from CSV", len(csv_mapping))
+        csv_mapping, timing_mapping = load_experiment_csv(experiment_csv)
+        logger.info("Loaded %d video paths and %d timing configs from CSV", len(csv_mapping), len(timing_mapping))
 
     transform = ImageTransform(cfg, train=False)
     out_dir = Path(output_dir)
@@ -505,7 +538,25 @@ def run_video_visualization(
 
         times = []
         probs = []
-        t = 0.0
+        
+        # Determine start/end time
+        t_start = 0.0
+        t_end = duration
+        
+        # Look up experiment timing if available
+        # Need date and subject_id from session info
+        info = parse_session_id(session_id)
+        if info:
+             key = (info.date, info.subject_id)
+             if key in timing_mapping:
+                 timing = timing_mapping[key]
+                 t_start = timing.start_sec
+                 t_end = min(duration, t_start + timing.duration_sec)
+                 logger.info("  -> Focusing on experiment time: %.1fs to %.1fs (Duration: %.1fs)", t_start, t_end, t_end - t_start)
+             else:
+                 logger.debug("  -> No custom timing found for %s (date=%s, subj=%s)", session_id, info.date, info.subject_id)
+
+        t = t_start
         model.eval()
         
         # Use configurable stride
@@ -514,7 +565,7 @@ def run_video_visualization(
             stride = 10  # Default fallback if config is 0/invalid
 
         with torch.no_grad():
-            while t + cfg.clip_sec <= duration:
+            while t + cfg.clip_sec <= t_end:
                 # Sample middle frame of current window
                 mid_t = t + cfg.clip_sec / 2.0
                 target_tensor = _extract_frame(
