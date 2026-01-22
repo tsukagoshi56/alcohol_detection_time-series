@@ -125,6 +125,14 @@ def _collect_vas_points(session: SessionData) -> List[tuple[float, int]]:
             t_sec += 600.0
             
         points.append((t_sec, group.vas_value))
+    
+    # Explicitly add VAS=0 at 10 min (600s) if not present
+    # Users reported it might be missing from CSV/VAS groups.
+    # Check if we have a point close to 600s
+    has_vas0 = any(abs(p[0] - 600.0) < 1.0 for p in points)
+    if not has_vas0:
+        points.append((600.0, 0))
+        
     points.sort(key=lambda x: x[0])
     return points
 
