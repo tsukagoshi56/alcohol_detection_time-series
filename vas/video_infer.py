@@ -448,8 +448,11 @@ def run_video_visualization(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    from tqdm.auto import tqdm
+    
     session_list = list(session_ids)
-    for idx, session_id in enumerate(session_list, 1):
+    # Use tqdm for progress bar
+    for session_id in tqdm(session_list, desc="Processing Videos"):
         session = sessions.get(session_id)
         if session is None:
             logger.warning("Session not found in index: %s", session_id)
@@ -476,7 +479,7 @@ def run_video_visualization(
              logger.warning("Video file does not exist: %s", video_path)
              continue
 
-        logger.info("Processing %s: %s", session_id, video_path)
+        logger.info("Processing %s", session_id)
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             logger.warning("Failed to open video: %s", video_path)
@@ -535,7 +538,7 @@ def run_video_visualization(
         if probs:
             data = {"times": np.array(times), "probs": np.stack(probs, axis=0)}
             save_timeseries_plot(out_dir, session, data, cfg)
-            logger.info("Video viz %s/%s done: %s", idx, len(session_list), session_id)
+            # logger.info("Video viz %s/%s done: %s", idx, len(session_list), session_id)
 
     if detector is not None:
         detector.close()
