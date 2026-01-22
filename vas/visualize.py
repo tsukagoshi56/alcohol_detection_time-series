@@ -95,11 +95,21 @@ def predict_timeseries(
 def _collect_vas_points(session: SessionData) -> List[tuple[float, int]]:
     points = []
     for group_id, group in session.vas_groups.items():
-        if group_id == "vas0":
-            continue
+        # Allow vas0 (which is 10 min typically)
+        # if group_id == "vas0":
+        #    continue
         if group.vas_time_min is None:
             continue
-        points.append((group.vas_time_min * 60.0, group.vas_value))
+            
+        t_sec = group.vas_time_min * 60.0
+        
+        # User requested shift:
+        # 1. 10 min point (vas0) -> Keep as is (600s)
+        # 2. Others (20, 40...) -> Shift by +10 min (+600s)
+        if group_id != "vas0":
+            t_sec += 600.0
+            
+        points.append((t_sec, group.vas_value))
     points.sort(key=lambda x: x[0])
     return points
 
