@@ -95,9 +95,11 @@ def main():
 
     fig, ax = plt.subplots(figsize=(10, 6))
     
-    rects1 = ax.bar(x - width, means["precision"], width, yerr=stds["precision"], label='Precision', capsize=5)
-    rects2 = ax.bar(x, means["recall"], width, yerr=stds["recall"], label='Recall', capsize=5)
-    rects3 = ax.bar(x + width, means["f1"], width, yerr=stds["f1"], label='F1-Score', capsize=5)
+    error_kw = dict(lw=1, capsize=3, capthick=1, alpha=0.6)  # Make error bars less prominent
+
+    rects1 = ax.bar(x - width, means["precision"], width, yerr=stds["precision"], label='Precision', error_kw=error_kw)
+    rects2 = ax.bar(x, means["recall"], width, yerr=stds["recall"], label='Recall', error_kw=error_kw)
+    rects3 = ax.bar(x + width, means["f1"], width, yerr=stds["f1"], label='F1-Score', error_kw=error_kw)
 
     # Add some text for labels, title and custom x-axis tick labels, etc.
     ax.set_ylabel('Score')
