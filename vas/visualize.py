@@ -116,9 +116,16 @@ def save_timeseries_plot(output_dir: Path, session: SessionData, data: Dict[str,
         _smooth(probs[:, i], smooth_window) for i in range(probs.shape[1])
     ], axis=1)
 
+    # Shift time axis to start from 0
+    offset = 0.0
+    if len(times) > 0:
+        offset = times[0]
+    
+    plot_times = times - offset
+
     fig, ax = plt.subplots(figsize=(12, 5))
     for i in range(probs.shape[1]):
-        ax.plot(times, smoothed[:, i], label=f"class{i}")
+        ax.plot(plot_times, smoothed[:, i], label=f"class{i}")
 
     # Avoid non-ASCII glyph issues in titles by keeping it simple.
     ax.set_title("Smoothed probabilities")
@@ -129,8 +136,12 @@ def save_timeseries_plot(output_dir: Path, session: SessionData, data: Dict[str,
 
     vas_points = _collect_vas_points(session)
     for t_sec, v in vas_points:
-        ax.axvline(t_sec, color="gray", alpha=0.35, linewidth=1)
-        ax.text(t_sec, 0.98, f"VAS={v}", rotation=90, va="top", ha="right", fontsize=8, color="gray")
+        # Shift VAS points by the same offset
+        t_sec_shifted = t_sec - offset
+        # Only plot if within visible range
+        if 0 <= t_sec_shifted <= plot_times[-1]:
+            ax.axvline(t_sec_shifted, color="gray", alpha=0.35, linewidth=1)
+            ax.text(t_sec_shifted, 0.98, f"VAS={v}", rotation=90, va="top", ha="right", fontsize=8, color="gray")
 
     fig.tight_layout()
 
