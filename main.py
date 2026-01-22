@@ -506,11 +506,14 @@ def main() -> None:
         if args.infer_stride_sec is not None:
             cfg_data["infer_stride_sec"] = args.infer_stride_sec
         else:
-            # Default to 10s stride for video viz as requested
-            cfg_data["infer_stride_sec"] = 10
+            # Use current default from Config class (which is 10)
+            cfg_data["infer_stride_sec"] = Config().infer_stride_sec
 
         if args.smooth_window_sec is not None:
             cfg_data["smooth_window_sec"] = args.smooth_window_sec
+        else:
+            # Use current default from Config class (which is 300)
+            cfg_data["smooth_window_sec"] = Config().smooth_window_sec
         cfg = Config(**cfg_data)
 
         sessions = load_sessions(cfg.index_path)
