@@ -22,8 +22,23 @@ logger = logging.getLogger(__name__)
 def _smooth(series: np.ndarray, window: int) -> np.ndarray:
     if window <= 1:
         return series
+    
+    # Pad edges with the edge values to handle boundaries gracefully in 'same' mode
+    # Pad radius is window // 2
+    radius = window // 2
+    padded = np.pad(series, (radius, radius), mode='edge')
+    
     kernel = np.ones(window, dtype=np.float32) / float(window)
-    return np.convolve(series, kernel, mode="same")
+    smoothed = np.convolve(padded, kernel, mode="valid")
+    
+    # Due to integer division and potential off-by-one window sizes, ensure size match
+    if len(smoothed) > len(series):
+        return smoothed[:len(series)]
+    elif len(smoothed) < len(series):
+        # Fallback (should typically not happen if padding is correct for 'valid')
+        return np.pad(smoothed, (0, len(series) - len(smoothed)), mode='edge')
+        
+    return smoothed
 
 
 def _pick_start(frames: List[Frame], clip_sec: int) -> float:
@@ -146,14 +161,16 @@ def save_timeseries_plot(output_dir: Path, session: SessionData, data: Dict[str,
     ax.legend(bbox_to_anchor=(1.01, 1), loc='upper left', borderaxespad=0)
 
     vas_points = _collect_vas_points(session)
+    margin_sec = 600.0  # Allow plotting VAS points even if slightly out of inferred range
     for t_sec, v in vas_points:
         # VAS points are already relative to experiment start (e.g. 600s = 10min)
         # So we do NOT subtract offset.
         t_sec_shifted = t_sec 
-        # Only plot if within visible range
-        if 0 <= t_sec_shifted <= plot_times[-1]:
+        # Only plot if within visible range (with margin)
+        # Often last VAS is exactly at the end, or slightly after if video cut short.
+        if 0 <= t_sec_shifted <= (plot_times[-1] + margin_sec):
             ax.axvline(t_sec_shifted, color="gray", alpha=0.35, linewidth=1)
-            ax.text(t_sec_shifted, 0.98, f"VAS={v}", rotation=90, va="top", ha="right", fontsize=8, color="gray")
+            ax.text(t_sec_shifted, 0.98, f"VAS={v}", rotation=90, va="top", ha="right", fontsize=10, color="gray")
 
     fig.tight_layout()
 
