@@ -64,5 +64,5 @@ class Config:
     noise_std: float = 0.0
 
     # Time-series visualization
-    infer_stride_sec: int = 1
-    smooth_window_sec: int = 15
+    infer_stride_sec: int = 10
+    smooth_window_sec: int = 300
